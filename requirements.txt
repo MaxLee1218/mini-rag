@@ -1,0 +1,30 @@
+# Core RAG framework
+langchain
+langchain-community
+langchain-openai
+
+# Vector database
+chromadb
+
+# OpenAI API
+openai
+
+# Environment variables
+python-dotenv
+
+# Document loading
+pypdf
+python-docx
+
+# Web app / demo UI
+streamlit
+
+# Data processing
+numpy
+pandas
+
+# Utilities
+tiktoken
+
+# Testing
+pytest
