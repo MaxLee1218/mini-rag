@@ -6,6 +6,8 @@ The goal is to ensure a minimal, correct, and modular RAG system for learning pu
 
 ---
 
+For all RAG system behavior, also follow `rag_spec.md`.
+
 ## 1. Project Goal
 
 This project is a minimal Retrieval-Augmented Generation (RAG) system.
