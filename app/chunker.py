@@ -38,3 +38,51 @@ def split_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100) -> li
         start += step
 
     return chunks
+
+
+def _get_document_text(document: dict) -> str:
+    if "content" in document:
+        return document["content"]
+    if "text" in document:
+        return document["text"]
+    raise ValueError("document must contain 'content' or 'text'")
+
+
+def split_document(
+    document: dict,
+    chunk_size: int = 500,
+    chunk_overlap: int = 100,
+) -> list[dict]:
+    if "source" not in document:
+        raise ValueError("document must contain 'source'")
+
+    text = _get_document_text(document)
+    text_chunks = split_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+
+    return [
+        {
+            "content": chunk,
+            "source": document["source"],
+            "chunk_id": chunk_id,
+        }
+        for chunk_id, chunk in enumerate(text_chunks)
+    ]
+
+
+def split_documents(
+    documents: list[dict],
+    chunk_size: int = 500,
+    chunk_overlap: int = 100,
+) -> list[dict]:
+    chunks = []
+
+    for document in documents:
+        chunks.extend(
+            split_document(
+                document,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+        )
+
+    return chunks
