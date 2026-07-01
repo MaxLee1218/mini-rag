@@ -3,6 +3,9 @@ langchain
 langchain-community
 langchain-openai
 
+# Embedding
+sentence-transformers
+
 # Vector database
 chromadb
 
