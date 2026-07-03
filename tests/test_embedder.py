@@ -3,7 +3,22 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
+import app.embeddings as embeddings_module
 from app.embeddings import Embedder
+
+
+EXPECTED_REQUIRED_LOCAL_MODEL_FILES = (
+    "model.safetensors",
+    "config.json",
+    "modules.json",
+    "config_sentence_transformers.json",
+    "sentence_bert_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "sentencepiece.bpe.model",
+    "1_Pooling/config.json",
+)
 
 
 class FakeEmbeddingModel:
@@ -32,6 +47,121 @@ class FakeEmbeddingModel:
 
 def make_embedder(dimension: int = 3) -> Embedder:
     return Embedder(model_name="fake-model", model=FakeEmbeddingModel(dimension))
+
+
+def configure_test_model_path(monkeypatch, tmp_path):
+    model_dir = tmp_path / "local-model"
+    monkeypatch.setattr(
+        embeddings_module,
+        "LOCAL_EMBEDDING_MODEL_PATH",
+        model_dir,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        embeddings_module,
+        "LOCAL_EMBEDDING_MODEL",
+        str(model_dir),
+        raising=False,
+    )
+    return model_dir
+
+
+def create_required_model_files(model_dir):
+    for file_name in embeddings_module.REQUIRED_LOCAL_MODEL_FILES:
+        file_path = model_dir / file_name
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("test", encoding="utf-8")
+
+
+def test_required_local_model_files_cover_sentence_transformer_files():
+    assert hasattr(embeddings_module, "REQUIRED_LOCAL_MODEL_FILES")
+    assert (
+        embeddings_module.REQUIRED_LOCAL_MODEL_FILES
+        == EXPECTED_REQUIRED_LOCAL_MODEL_FILES
+    )
+
+
+def test_local_embedding_model_unavailable_when_directory_is_missing(
+    monkeypatch,
+    tmp_path,
+):
+    assert hasattr(embeddings_module, "_local_embedding_model_available")
+    configure_test_model_path(monkeypatch, tmp_path)
+
+    assert embeddings_module._local_embedding_model_available() is False
+
+
+def test_local_embedding_model_unavailable_when_required_file_is_missing(
+    monkeypatch,
+    tmp_path,
+):
+    assert hasattr(embeddings_module, "_local_embedding_model_available")
+    model_dir = configure_test_model_path(monkeypatch, tmp_path)
+    create_required_model_files(model_dir)
+    (model_dir / "model.safetensors").unlink()
+
+    assert embeddings_module._local_embedding_model_available() is False
+
+
+def test_local_embedding_model_available_when_required_files_exist(
+    monkeypatch,
+    tmp_path,
+):
+    assert hasattr(embeddings_module, "_local_embedding_model_available")
+    model_dir = configure_test_model_path(monkeypatch, tmp_path)
+    create_required_model_files(model_dir)
+
+    assert embeddings_module._local_embedding_model_available() is True
+
+
+def test_default_embedding_model_uses_remote_model_when_local_is_unavailable(
+    monkeypatch,
+    tmp_path,
+):
+    assert hasattr(embeddings_module, "_default_embedding_model")
+    configure_test_model_path(monkeypatch, tmp_path)
+
+    assert (
+        embeddings_module._default_embedding_model()
+        == embeddings_module.REMOTE_EMBEDDING_MODEL
+    )
+
+
+def test_default_embedding_model_uses_local_model_when_local_is_available(
+    monkeypatch,
+    tmp_path,
+):
+    assert hasattr(embeddings_module, "_default_embedding_model")
+    model_dir = configure_test_model_path(monkeypatch, tmp_path)
+    create_required_model_files(model_dir)
+
+    assert embeddings_module._default_embedding_model() == str(model_dir)
+
+
+def test_embedder_without_model_name_uses_runtime_default(monkeypatch):
+    assert hasattr(embeddings_module, "_default_embedding_model")
+    monkeypatch.setattr(
+        embeddings_module,
+        "_default_embedding_model",
+        lambda: "runtime-default-model",
+    )
+
+    embedder = Embedder(model_name=None, model=FakeEmbeddingModel())
+
+    assert embedder.model_name == "runtime-default-model"
+
+
+def test_embedder_explicit_model_name_overrides_default_selection(monkeypatch):
+    assert hasattr(embeddings_module, "_default_embedding_model")
+    monkeypatch.setattr(
+        embeddings_module,
+        "_default_embedding_model",
+        lambda: "runtime-default-model",
+    )
+
+    embedder = Embedder(model_name="custom-model", model=FakeEmbeddingModel())
+
+    assert embedder.model_name == "custom-model"
 
 
 def test_embed_texts_returns_numpy_array_with_expected_shape():
