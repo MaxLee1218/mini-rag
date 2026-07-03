@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 
 
-DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+DEFAULT_EMBEDDING_MODEL = "models/paraphrase-multilingual-MiniLM-L12-v2"
 TEXT_FIELDS = ("text", "content", "chunk")
 OUTPUT_KEYS = (
     "id",
