@@ -17,6 +17,7 @@ class RAGResult:
     answer: str
     contexts: list[Any]
     sources: list[str]
+    prompt: str | None = None
 
 
 class RAGPipeline:
@@ -61,6 +62,7 @@ class RAGPipeline:
                 contexts,
                 max_sources=resolved_top_k,
             ),
+            prompt=prompt,
         )
 
     def _build_prompt(self, question: str, contexts: list[Any]) -> str:

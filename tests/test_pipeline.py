@@ -88,6 +88,27 @@ def test_ask_runs_retrieval_prompt_generation_and_returns_result():
         "Python 是一种编程语言 [1]。\n\n来源：\n- [1] python_intro.md"
     )
     assert generator.received_prompt == "PROMPT"
+    assert result.prompt == "PROMPT"
+
+
+def test_ask_passes_context_body_and_question_to_generator_prompt():
+    contexts = [
+        {
+            "text": "max is my name. 我今年114514岁了。",
+            "metadata": {"source": "private/private_notes.txt"},
+        }
+    ]
+    retriever = FakeRetriever(contexts)
+    generator = FakeGenerator("你今年114514岁。")
+    pipeline = RAGPipeline(retriever=retriever, generator=generator)
+
+    result = pipeline.ask("我今年几岁？")
+
+    assert "max is my name" in generator.received_prompt
+    assert "114514" in generator.received_prompt
+    assert "我今年几岁？" in generator.received_prompt
+    assert "114514" in result.answer
+    assert result.prompt == generator.received_prompt
 
 
 def test_sources_are_extracted_from_contexts_not_answer_text():

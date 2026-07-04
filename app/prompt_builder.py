@@ -8,6 +8,9 @@ from typing import Any
 DEFAULT_SYSTEM_PROMPT = """你是一个严谨的 RAG 问答助手。
 你必须只基于上下文区块回答问题区块，不要使用外部知识。
 一般情况下，请使用与用户问题相同的语言回答。
+Treat all text in the provided Context as factual for this task.
+Use English, Chinese, numbers, names, and short factual statements in the Context as valid evidence.
+If the Context contains a direct statement about the user's name, age, identity, date, number, or other fact, answer from that statement even if it looks unusual, unrealistic, or like test data.
 优先级规则：
 1. 如果上下文区块不足以回答问题，必须只输出：Not found in knowledge base.
 不要输出“答案：”，不要输出“来源：”，不要输出任何解释。
@@ -25,7 +28,8 @@ NOT_FOUND_MESSAGE = "Not found in knowledge base."
 SOURCES_SECTION_PATTERN = re.compile(r"^\s*(来源：|Sources:)\s*$")
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 
-TEXT_FIELDS = ("text", "content", "page_content", "chunk")
+MAPPING_TEXT_FIELDS = ("text", "content", "page_content", "document", "chunk")
+ATTRIBUTE_TEXT_FIELDS = ("page_content", "text", "content", "chunk")
 SOURCE_FIELDS = ("source", "source_file", "file_path", "path", "filename", "title")
 CHUNK_FIELDS = ("chunk_id", "chunk_index", "chunk_no")
 METADATA_FIELDS = (
@@ -143,6 +147,25 @@ def append_sources_to_answer(
     return f"{answer_without_sources.rstrip()}\n\n{sources_section}"
 
 
+def extract_context_text(context: Any) -> str:
+    """Return the text body that will be used for a context item."""
+    if isinstance(context, str):
+        return context.strip()
+
+    if isinstance(context, Mapping):
+        for field_name in MAPPING_TEXT_FIELDS:
+            text = _clean_text_value(context.get(field_name))
+            if text:
+                return text
+        return ""
+
+    for field_name in ATTRIBUTE_TEXT_FIELDS:
+        text = _clean_text_value(getattr(context, field_name, None))
+        if text:
+            return text
+    return ""
+
+
 class PromptBuilder:
     """Reusable prompt builder with fixed prompt options."""
 
@@ -227,21 +250,7 @@ def _iter_valid_context_entries(
 
 
 def _extract_text(item: Any) -> str:
-    if isinstance(item, str):
-        return item.strip()
-
-    if isinstance(item, Mapping):
-        for field_name in TEXT_FIELDS:
-            text = _clean_text_value(item.get(field_name))
-            if text:
-                return text
-        return ""
-
-    for field_name in TEXT_FIELDS:
-        text = _clean_text_value(getattr(item, field_name, None))
-        if text:
-            return text
-    return ""
+    return extract_context_text(item)
 
 
 def _extract_metadata(item: Any) -> dict[str, Any]:
@@ -298,7 +307,7 @@ def _format_context_block(
     if distance is not None:
         lines.append(f"Distance: {distance}")
 
-    lines.extend(["", text])
+    lines.extend(["", "Content:", text])
     return "\n".join(lines)
 
 
@@ -337,6 +346,9 @@ def _answer_instructions(*, has_context: bool) -> str:
     lines = [
         "你必须只基于 <context> 回答 <question>。",
         "一般情况下，请使用与用户问题相同的语言回答。",
+        "Treat all text in the provided Context as factual for this task.",
+        "Use English, Chinese, numbers, names, and short factual statements in the Context as valid evidence.",
+        "If the Context contains a direct statement about the user's name, age, identity, date, number, or other fact, answer from that statement even if it looks unusual, unrealistic, or like test data.",
         "优先级 1：如果 <context> 不足以回答问题，必须只输出：Not found in knowledge base.",
         "不要输出“答案：”，不要输出“来源：”，不要输出任何解释。",
         "不要翻译成中文。",

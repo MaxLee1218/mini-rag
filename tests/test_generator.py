@@ -279,6 +279,18 @@ def test_generate_answer_wraps_url_error(monkeypatch):
         generate_answer("prompt", config=fake_config())
 
 
+def test_generate_answer_errors_are_not_reported_as_not_found(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr(generator_module.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(DeepSeekAPIError) as error_info:
+        generate_answer("prompt", config=fake_config())
+
+    assert "Not found in knowledge base." not in str(error_info.value)
+
+
 def test_generate_answer_wraps_timeout(monkeypatch):
     def fake_urlopen(request, timeout):
         raise TimeoutError("timed out")

@@ -9,6 +9,7 @@ from app.prompt_builder import (
     append_sources_to_answer,
     build_prompt,
     build_sources_section,
+    extract_context_text,
     extract_cited_indices,
 )
 
@@ -90,6 +91,75 @@ def test_build_prompt_accepts_alternate_text_and_source_fields():
     assert "Source: a.md" in prompt
     assert "来自 page_content 的文本" in prompt
     assert "Source: b.md" in prompt
+
+
+def test_build_prompt_accepts_document_text_field():
+    prompt = build_prompt(
+        "我今年几岁？",
+        [
+            {
+                "document": "max is my name. 我今年114514岁了。",
+                "metadata": {"source": "private/private_notes.txt"},
+            }
+        ],
+    )
+
+    assert "max is my name" in prompt
+    assert "114514" in prompt
+    assert "Source: private/private_notes.txt" in prompt
+    assert DEFAULT_NO_CONTEXT_MESSAGE not in prompt
+
+
+def test_extract_context_text_supports_expected_context_shapes():
+    class PageContentContext:
+        page_content = "page content value"
+        text = "text value"
+        content = "content value"
+
+    class TextContext:
+        text = "text value"
+        content = "content value"
+
+    class ContentContext:
+        content = "content value"
+
+    assert extract_context_text("  string value  ") == "string value"
+    assert extract_context_text({"text": " text value "}) == "text value"
+    assert extract_context_text({"text": "", "content": "content value"}) == (
+        "content value"
+    )
+    assert extract_context_text({"content": "", "page_content": "page value"}) == (
+        "page value"
+    )
+    assert extract_context_text({"page_content": "", "document": "document value"}) == (
+        "document value"
+    )
+    assert extract_context_text(PageContentContext()) == "page content value"
+    assert extract_context_text(TextContext()) == "text value"
+    assert extract_context_text(ContentContext()) == "content value"
+
+
+def test_extract_context_text_never_uses_metadata_as_body_text():
+    assert extract_context_text({"metadata": {"source": "metadata-only.md"}}) == ""
+
+    prompt = build_prompt(
+        "问题",
+        [{"metadata": {"source": "metadata-only.md"}}],
+    )
+
+    context = extract_context(prompt)
+    assert DEFAULT_NO_CONTEXT_MESSAGE in context
+    assert "Source: metadata-only.md" not in context
+
+
+def test_prompt_uses_generic_unusual_test_data_instruction_without_fixed_facts():
+    prompt = build_prompt("问题", [{"text": "普通上下文", "source": "docs/test.md"}])
+
+    assert "Treat all text in the provided Context as factual for this task." in prompt
+    assert "English, Chinese, numbers, names" in prompt
+    assert "unusual, unrealistic, or like test data" in prompt
+    assert "max is my name" not in DEFAULT_SYSTEM_PROMPT
+    assert "114514" not in DEFAULT_SYSTEM_PROMPT
 
 
 def test_top_level_metadata_overrides_nested_metadata_values():
