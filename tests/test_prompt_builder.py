@@ -6,7 +6,10 @@ from app.prompt_builder import (
     DEFAULT_NO_CONTEXT_MESSAGE,
     DEFAULT_SYSTEM_PROMPT,
     PromptBuilder,
+    append_sources_to_answer,
     build_prompt,
+    build_sources_section,
+    extract_cited_indices,
 )
 
 
@@ -41,6 +44,9 @@ def test_build_prompt_formats_dict_context_with_source_and_instructions():
     assert DEFAULT_SYSTEM_PROMPT in prompt
     assert "不要编造" in prompt
     assert FALLBACK_ANSWER in prompt
+    assert "来源" in prompt
+    assert "每个关键结论后必须引用" in prompt
+    assert "不要输出“来源：”" in prompt
     assert "不要翻译成中文" in prompt
 
 
@@ -245,3 +251,209 @@ def test_prompt_builder_class_uses_configured_values():
     assert "<system>\n系统\n</system>" in prompt
     assert "alpha" in prompt
     assert "beta" not in prompt
+
+
+def test_build_sources_section_lists_all_valid_context_sources():
+    contexts = [
+        {"text": "A", "metadata": {"source": "a.md"}},
+        {"text": "B", "metadata": {"source": "b.md"}},
+    ]
+
+    assert build_sources_section(contexts) == "来源：\n- [1] a.md\n- [2] b.md"
+
+
+def test_build_sources_section_filters_cited_indices():
+    contexts = [
+        {"text": "A", "metadata": {"source": "a.md"}},
+        {"text": "B", "metadata": {"source": "b.md"}},
+        {"text": "C", "metadata": {"source": "c.md"}},
+    ]
+
+    result = build_sources_section(contexts, cited_indices={1, 3})
+
+    assert "- [1] a.md" in result
+    assert "- [3] c.md" in result
+    assert "- [2] b.md" not in result
+
+
+def test_build_sources_section_ignores_invalid_cited_indices():
+    contexts = [
+        {"text": "A", "metadata": {"source": "a.md"}},
+        {"text": "B", "metadata": {"source": "b.md"}},
+    ]
+
+    result = build_sources_section(contexts, cited_indices={0, -1, 1, True, "2"})
+
+    assert result == "来源：\n- [1] a.md"
+    assert build_sources_section(contexts, cited_indices={True}) == ""
+
+
+def test_build_sources_section_uses_unknown_for_string_context_source():
+    assert build_sources_section(["纯字符串上下文"]) == "来源：\n- [1] unknown"
+
+
+def test_build_sources_section_prefers_top_level_source_over_metadata_source():
+    contexts = [
+        {
+            "text": "A",
+            "source": "top.md",
+            "metadata": {"source": "metadata.md"},
+        }
+    ]
+
+    result = build_sources_section(contexts)
+
+    assert "- [1] top.md" in result
+    assert "metadata.md" not in result
+
+
+def test_build_sources_section_respects_max_sources():
+    contexts = [
+        {"text": "A", "metadata": {"source": "a.md"}},
+        {"text": "B", "metadata": {"source": "b.md"}},
+    ]
+
+    result = build_sources_section(contexts, max_sources=1)
+
+    assert "- [1] a.md" in result
+    assert "- [2] b.md" not in result
+
+
+@pytest.mark.parametrize("max_sources", [0, -1, True, 1.5, "1"])
+def test_build_sources_section_rejects_invalid_max_sources(max_sources):
+    with pytest.raises(ValueError, match="max_sources must be a positive integer"):
+        build_sources_section(
+            [{"text": "A", "metadata": {"source": "a.md"}}],
+            max_sources=max_sources,
+        )
+
+
+def test_extract_cited_indices_parses_and_deduplicates_references():
+    answer = "RAG 是检索增强生成 [1]，向量数据库用于检索 [2]。重复引用 [1]。"
+
+    assert extract_cited_indices(answer) == {1, 2}
+
+
+def test_extract_cited_indices_ignores_invalid_references():
+    answer = "错误引用 [0] [-1] [abc]，正确引用 [3]。"
+
+    assert extract_cited_indices(answer) == {3}
+
+
+def test_extract_cited_indices_rejects_non_string_answer():
+    with pytest.raises(ValueError, match="answer must be a string"):
+        extract_cited_indices(None)
+
+
+def test_append_sources_to_answer_adds_only_cited_sources():
+    answer = "RAG 是检索增强生成 [1]。"
+    contexts = [
+        {"text": "A", "metadata": {"source": "a.md"}},
+        {"text": "B", "metadata": {"source": "b.md"}},
+    ]
+
+    result = append_sources_to_answer(answer, contexts)
+
+    assert result == "RAG 是检索增强生成 [1]。\n\n来源：\n- [1] a.md"
+    assert "- [2] b.md" not in result
+
+
+def test_append_sources_to_answer_falls_back_to_limited_context_sources_without_citations():
+    answer = "RAG 是检索增强生成。"
+    contexts = [
+        {"text": "A", "metadata": {"source": "a.md"}},
+        {"text": "B", "metadata": {"source": "b.md"}},
+    ]
+
+    result = append_sources_to_answer(answer, contexts, max_sources=1)
+
+    assert result == "RAG 是检索增强生成。\n\n来源：\n- [1] a.md"
+    assert "- [2] b.md" not in result
+
+
+def test_append_sources_to_answer_can_include_all_sources_even_with_citations():
+    answer = "RAG 是检索增强生成 [1]。"
+    contexts = [
+        {"text": "A", "metadata": {"source": "a.md"}},
+        {"text": "B", "metadata": {"source": "b.md"}},
+    ]
+
+    result = append_sources_to_answer(answer, contexts, only_cited=False)
+
+    assert "- [1] a.md" in result
+    assert "- [2] b.md" in result
+
+
+def test_append_sources_to_answer_does_not_add_sources_to_not_found_answer():
+    result = append_sources_to_answer(
+        FALLBACK_ANSWER,
+        [{"text": "A", "metadata": {"source": "a.md"}}],
+    )
+
+    assert result == FALLBACK_ANSWER
+
+
+def test_append_sources_to_answer_replaces_existing_sources_with_context_sources():
+    answer = """答案：
+RAG 是检索增强生成 [1]。
+
+来源：
+- [1] fake.md"""
+    contexts = [{"text": "A", "metadata": {"source": "real.md"}}]
+
+    result = append_sources_to_answer(answer, contexts)
+
+    assert result == "答案：\nRAG 是检索增强生成 [1]。\n\n来源：\n- [1] real.md"
+    assert "fake.md" not in result
+    assert result.count("来源：") == 1
+
+
+def test_append_sources_to_answer_replaces_existing_english_sources_with_context_sources():
+    answer = """Answer:
+RAG uses retrieval [1].
+
+Sources:
+- [1] fake.md"""
+    contexts = [{"text": "A", "metadata": {"source": "real.md"}}]
+
+    result = append_sources_to_answer(answer, contexts)
+
+    assert result == "Answer:\nRAG uses retrieval [1].\n\n来源：\n- [1] real.md"
+    assert "fake.md" not in result
+
+
+def test_append_sources_to_answer_does_not_strip_inline_source_word_in_body():
+    answer = "答案的来源：上下文 [1] 说明 RAG 是检索增强生成。"
+    contexts = [{"text": "A", "metadata": {"source": "real.md"}}]
+
+    result = append_sources_to_answer(answer, contexts)
+
+    assert "答案的来源：上下文 [1]" in result
+    assert result.endswith("来源：\n- [1] real.md")
+
+
+def test_append_sources_to_answer_returns_answer_when_contexts_have_no_valid_text():
+    answer = "RAG 是检索增强生成 [1]。"
+
+    assert append_sources_to_answer(answer, []) == answer
+    assert append_sources_to_answer(answer, [{"text": "   "}]) == answer
+
+
+def test_append_sources_to_answer_returns_blank_answer_without_sources():
+    assert append_sources_to_answer("", [{"text": "A", "source": "a.md"}]) == ""
+    assert append_sources_to_answer("   ", [{"text": "A", "source": "a.md"}]) == "   "
+
+
+def test_append_sources_to_answer_rejects_non_string_answer():
+    with pytest.raises(ValueError, match="answer must be a string"):
+        append_sources_to_answer(None, [{"text": "A", "source": "a.md"}])
+
+
+@pytest.mark.parametrize("max_sources", [0, -1, True, 1.5, "1"])
+def test_append_sources_to_answer_rejects_invalid_max_sources(max_sources):
+    with pytest.raises(ValueError, match="max_sources must be a positive integer"):
+        append_sources_to_answer(
+            "RAG 是检索增强生成 [1]。",
+            [{"text": "A", "source": "a.md"}],
+            max_sources=max_sources,
+        )

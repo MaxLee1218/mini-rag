@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 
 DEFAULT_SYSTEM_PROMPT = """你是一个严谨的 RAG 问答助手。
-你必须只根据给定的上下文回答问题，不要使用外部知识。
-不要编造不存在的事实、数字、文件名或来源。
-回答时尽量引用上下文编号，例如 [1]、[2]。
+你必须只基于上下文区块回答问题区块，不要使用外部知识。
 一般情况下，请使用与用户问题相同的语言回答。
-如果上下文不足以回答问题，必须只输出：Not found in knowledge base.
-不要附加解释。
+优先级规则：
+1. 如果上下文区块不足以回答问题，必须只输出：Not found in knowledge base.
+不要输出“答案：”，不要输出“来源：”，不要输出任何解释。
 不要翻译成中文。
-不要输出“根据当前资料无法确定”等其他表达。"""
+不要输出“根据当前资料无法确定”等其他表达。
+2. 如果使用了上下文区块中的信息回答问题，每个关键结论后必须引用上下文编号，例如 [1]、[2]。
+回答末尾必须包含“来源：”部分。
+“来源：”部分只能列出实际使用过的上下文编号和对应 Source。
+3. 只能引用上下文区块中存在的编号。
+4. 不要编造不存在的事实、数字、编号、文件名、路径或来源。"""
 
 DEFAULT_NO_CONTEXT_MESSAGE = "No relevant context was retrieved."
 TRUNCATION_MESSAGE = "[Context truncated due to length limit.]"
+NOT_FOUND_MESSAGE = "Not found in knowledge base."
+SOURCES_SECTION_PATTERN = re.compile(r"^\s*(来源：|Sources:)\s*$")
+CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 
 TEXT_FIELDS = ("text", "content", "page_content", "chunk")
 SOURCE_FIELDS = ("source", "source_file", "file_path", "path", "filename", "title")
@@ -66,6 +74,75 @@ def build_prompt(
     )
 
 
+def build_sources_section(
+    contexts: Sequence[Any],
+    *,
+    cited_indices: set[int] | None = None,
+    max_sources: int | None = None,
+) -> str:
+    """Build a deterministic sources section from retrieved contexts."""
+    source_limit = _validate_optional_positive_int(max_sources, "max_sources")
+    valid_cited_indices = _valid_cited_indices(cited_indices)
+    lines = []
+
+    for entry in _iter_valid_context_entries(contexts):
+        index = entry["index"]
+        if valid_cited_indices is not None and index not in valid_cited_indices:
+            continue
+
+        lines.append(f"- [{index}] {entry['source']}")
+        if source_limit is not None and len(lines) >= source_limit:
+            break
+
+    if not lines:
+        return ""
+    return "来源：\n" + "\n".join(lines)
+
+
+def extract_cited_indices(answer: str) -> set[int]:
+    """Extract positive citation indices like [1] and [10] from an answer."""
+    if not isinstance(answer, str):
+        raise ValueError("answer must be a string")
+
+    indices = set()
+    for match in CITATION_PATTERN.finditer(answer):
+        index = int(match.group(1))
+        if index > 0:
+            indices.add(index)
+    return indices
+
+
+def append_sources_to_answer(
+    answer: str,
+    contexts: Sequence[Any],
+    *,
+    max_sources: int | None = None,
+    only_cited: bool = True,
+) -> str:
+    """Append a context-derived sources section without trusting model output."""
+    if not isinstance(answer, str):
+        raise ValueError("answer must be a string")
+    source_limit = _validate_optional_positive_int(max_sources, "max_sources")
+
+    if not answer.strip():
+        return answer
+    if answer.strip() == NOT_FOUND_MESSAGE:
+        return NOT_FOUND_MESSAGE
+
+    answer_without_sources = _strip_existing_sources_section(answer)
+    cited_indices = extract_cited_indices(answer_without_sources) if only_cited else None
+
+    sources_section = build_sources_section(
+        contexts,
+        cited_indices=cited_indices if cited_indices else None,
+        max_sources=source_limit,
+    )
+    if not sources_section:
+        return answer_without_sources.rstrip()
+
+    return f"{answer_without_sources.rstrip()}\n\n{sources_section}"
+
+
 class PromptBuilder:
     """Reusable prompt builder with fixed prompt options."""
 
@@ -103,30 +180,50 @@ def _format_contexts(
     max_context_chars: int,
     max_chunks: int | None,
 ) -> str:
-    if isinstance(contexts, (str, bytes)):
-        raise ValueError("contexts must be a sequence of context items")
-
-    blocks = []
-    for item in contexts:
-        text = _extract_text(item)
-        if not text:
-            continue
-
-        blocks.append(
-            _format_context_block(
-                index=len(blocks) + 1,
-                text=text,
-                metadata=_extract_metadata(item),
-            )
+    blocks = [
+        _format_context_block(
+            index=entry["index"],
+            text=entry["text"],
+            metadata=entry["metadata"],
         )
-        if max_chunks is not None and len(blocks) >= max_chunks:
-            break
+        for entry in _iter_valid_context_entries(contexts, max_chunks=max_chunks)
+    ]
 
     if not blocks:
         return DEFAULT_NO_CONTEXT_MESSAGE
 
     formatted = "\n\n".join(blocks)
     return _truncate_context(formatted, max_context_chars)
+
+
+def _iter_valid_context_entries(
+    contexts: Sequence[Any],
+    *,
+    max_chunks: int | None = None,
+) -> list[dict[str, Any]]:
+    if isinstance(contexts, (str, bytes)):
+        raise ValueError("contexts must be a sequence of context items")
+
+    entries = []
+    for item in contexts:
+        text = _extract_text(item)
+        if not text:
+            continue
+
+        metadata = _extract_metadata(item)
+        entries.append(
+            {
+                "index": len(entries) + 1,
+                "item": item,
+                "text": text,
+                "metadata": metadata,
+                "source": _source_from_metadata(metadata),
+            }
+        )
+        if max_chunks is not None and len(entries) >= max_chunks:
+            break
+
+    return entries
 
 
 def _extract_text(item: Any) -> str:
@@ -238,18 +335,42 @@ def _trim_to_readable_boundary(text: str) -> str:
 
 def _answer_instructions(*, has_context: bool) -> str:
     lines = [
-        "请基于 <context> 回答 <question>。",
+        "你必须只基于 <context> 回答 <question>。",
         "一般情况下，请使用与用户问题相同的语言回答。",
-        "如果上下文不足以回答问题，必须只输出：Not found in knowledge base.",
-        "不要附加解释。",
+        "优先级 1：如果 <context> 不足以回答问题，必须只输出：Not found in knowledge base.",
+        "不要输出“答案：”，不要输出“来源：”，不要输出任何解释。",
         "不要翻译成中文。",
         "不要输出“根据当前资料无法确定”等其他表达。",
-        "不要编造不存在的事实、数字、文件名或来源。",
-        "回答中如使用某个上下文片段的信息，请引用对应编号，例如 [1]。",
+        "优先级 2：如果使用了 <context> 中的信息回答问题，每个关键结论后必须引用编号，例如 [1]、[2]。",
+        "回答末尾必须输出“来源：”部分。",
+        "“来源：”部分只能列出实际使用过的上下文编号和对应 Source。",
+        "不允许引用 <context> 中不存在的编号。",
+        "不要编造不存在的事实、数字、编号、文件名、路径或来源。",
     ]
     if not has_context:
         lines.append("当前没有检索到相关资料，不能编造答案。")
     return "\n".join(lines)
+
+
+def _strip_existing_sources_section(answer: str) -> str:
+    lines = answer.splitlines()
+    for index, line in enumerate(lines):
+        if SOURCES_SECTION_PATTERN.match(line):
+            return "\n".join(lines[:index])
+    return answer
+
+
+def _valid_cited_indices(cited_indices: set[int] | None) -> set[int] | None:
+    if cited_indices is None:
+        return None
+
+    valid_indices = set()
+    for index in cited_indices:
+        if isinstance(index, bool):
+            continue
+        if isinstance(index, int) and index > 0:
+            valid_indices.add(index)
+    return valid_indices
 
 
 def _source_from_metadata(metadata: Mapping[str, Any]) -> str:
