@@ -220,3 +220,9 @@ __marimo__/
 # Chroma vector database
 data/chroma/
 .chroma/
+
+# Private local documents
+data/raw/private/
+
+# Local Hugging Face models
+models/

@@ -1,0 +1,2 @@
+Embedding models convert text into numerical vectors.
+Vector search compares query vectors with document vectors to find semantic similarity.

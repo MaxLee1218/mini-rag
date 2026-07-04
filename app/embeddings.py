@@ -2,12 +2,48 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 
-DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LOCAL_EMBEDDING_MODEL_PATH = (
+    PROJECT_ROOT / "models" / "paraphrase-multilingual-MiniLM-L12-v2"
+)
+LOCAL_EMBEDDING_MODEL = str(LOCAL_EMBEDDING_MODEL_PATH)
+REMOTE_EMBEDDING_MODEL = (
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+)
+REQUIRED_LOCAL_MODEL_FILES = (
+    "model.safetensors",
+    "config.json",
+    "modules.json",
+    "config_sentence_transformers.json",
+    "sentence_bert_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "sentencepiece.bpe.model",
+    "1_Pooling/config.json",
+)
+
+
+def _local_embedding_model_available() -> bool:
+    return LOCAL_EMBEDDING_MODEL_PATH.is_dir() and all(
+        (LOCAL_EMBEDDING_MODEL_PATH / file_name).exists()
+        for file_name in REQUIRED_LOCAL_MODEL_FILES
+    )
+
+
+def _default_embedding_model() -> str:
+    if _local_embedding_model_available():
+        return LOCAL_EMBEDDING_MODEL
+    return REMOTE_EMBEDDING_MODEL
+
+
+DEFAULT_EMBEDDING_MODEL = _default_embedding_model()
 TEXT_FIELDS = ("text", "content", "chunk")
 OUTPUT_KEYS = (
     "id",
@@ -22,18 +58,21 @@ OUTPUT_KEYS = (
 class Embedder:
     def __init__(
         self,
-        model_name: str = DEFAULT_EMBEDDING_MODEL,
+        model_name: str | None = None,
         batch_size: int = 32,
         normalize: bool = True,
         device: str | None = None,
         model: Any | None = None,
     ):
-        if not isinstance(model_name, str) or not model_name.strip():
+        selected_model_name = (
+            _default_embedding_model() if model_name is None else model_name
+        )
+        if not isinstance(selected_model_name, str) or not selected_model_name.strip():
             raise ValueError("model_name must not be blank")
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than 0")
 
-        self.model_name = model_name
+        self.model_name = selected_model_name
         self.batch_size = batch_size
         self.normalize = normalize
         self.device = device

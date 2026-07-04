@@ -1,8 +1,72 @@
 from pathlib import Path
 
+import pytest
 from docx import Document as DocxDocument
 
 from app import document_loader
+
+
+def test_load_document_file_returns_text_and_metadata(tmp_path):
+    raw_file = tmp_path / "sample.txt"
+    raw_file.write_text("  alpha\t\tbeta  ", encoding="utf-8")
+
+    document = document_loader.load_document_file(raw_file, base_path=tmp_path)
+
+    assert document == {
+        "text": "alpha beta",
+        "metadata": {
+            "source": "sample.txt",
+            "filename": "sample.txt",
+            "relative_path": "sample.txt",
+        },
+    }
+
+
+def test_load_document_file_loads_markdown_as_plain_text(tmp_path):
+    raw_file = tmp_path / "notes.md"
+    raw_file.write_text("# Title\n\nRAG uses **context**.", encoding="utf-8")
+
+    document = document_loader.load_document_file(raw_file, base_path=tmp_path)
+
+    assert document["text"] == "# Title\n\nRAG uses **context**."
+    assert document["metadata"]["filename"] == "notes.md"
+    assert document["metadata"]["relative_path"] == "notes.md"
+
+
+def test_load_document_file_raises_for_missing_file(tmp_path):
+    missing_file = tmp_path / "missing.txt"
+
+    with pytest.raises(FileNotFoundError, match="document file does not exist"):
+        document_loader.load_document_file(missing_file, base_path=tmp_path)
+
+
+def test_load_document_file_raises_for_directory(tmp_path):
+    with pytest.raises(ValueError, match="document path must be a file"):
+        document_loader.load_document_file(tmp_path, base_path=tmp_path)
+
+
+def test_load_document_file_raises_for_unsupported_extension(tmp_path):
+    raw_file = tmp_path / "ignored.json"
+    raw_file.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsupported document extension"):
+        document_loader.load_document_file(raw_file, base_path=tmp_path)
+
+
+def test_load_document_file_raises_for_empty_text(tmp_path):
+    raw_file = tmp_path / "empty.md"
+    raw_file.write_text(" \t\n ", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="document is empty"):
+        document_loader.load_document_file(raw_file, base_path=tmp_path)
+
+
+def test_load_document_file_raises_clear_unicode_error(tmp_path):
+    raw_file = tmp_path / "bad.txt"
+    raw_file.write_bytes(b"\xff\xfe\x00")
+
+    with pytest.raises(ValueError, match="failed to decode document as UTF-8"):
+        document_loader.load_document_file(raw_file, base_path=tmp_path)
 
 
 def test_txt_collapses_spaces_and_tabs_but_preserves_newlines(tmp_path):
@@ -26,6 +90,20 @@ def test_empty_txt_file_is_skipped(tmp_path):
     documents = document_loader.load_documents(str(tmp_path))
 
     assert documents == []
+
+
+def test_markdown_files_are_loaded_by_load_documents(tmp_path):
+    raw_file = tmp_path / "notes.md"
+    raw_file.write_text("markdown note", encoding="utf-8")
+
+    documents = document_loader.load_documents(str(tmp_path))
+
+    assert documents == [
+        {
+            "text": "markdown note",
+            "source": "notes.md",
+        }
+    ]
 
 
 def test_docx_paragraphs_are_joined_with_newlines(tmp_path):
@@ -93,7 +171,7 @@ def test_recursive_scan_uses_posix_relative_source_paths(tmp_path):
 
 
 def test_unsupported_files_are_ignored(tmp_path):
-    raw_file = tmp_path / "ignored.md"
+    raw_file = tmp_path / "ignored.json"
     raw_file.write_text("ignored", encoding="utf-8")
 
     documents = document_loader.load_documents(str(tmp_path))

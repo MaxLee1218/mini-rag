@@ -1,0 +1,2 @@
+Retrieval-Augmented Generation, or RAG, retrieves relevant context before generating an answer.
+RAG helps language models answer using external documents.
