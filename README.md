@@ -16,6 +16,7 @@ This project implements a complete basic Retrieval-Augmented Generation pipeline
 - Append sources to answers as a fallback
 - Run real full-chain smoke tests
 - Ask questions through a formal CLI entrypoint
+- Expose `GET /health` and `POST /ask` through FastAPI
 - Unit tests for core modules and CLI behavior
 
 ## Project Structure
@@ -24,11 +25,14 @@ This project implements a complete basic Retrieval-Augmented Generation pipeline
 mini-rag/
 ├── app/
 │   ├── chunker.py              # Split documents into chunks
+│   ├── api.py                  # FastAPI HTTP service layer
 │   ├── config.py               # Project configuration and .env loading
 │   ├── document_loader.py      # Load raw text documents
 │   ├── embeddings.py           # Embedding model wrapper
 │   ├── generator.py            # DeepSeek LLM generator
 │   ├── pipeline.py             # Main RAG orchestration layer
+│   ├── pipeline_factory.py     # Build the default RAG pipeline
+│   ├── schemas.py              # API request and response models
 │   ├── prompt_builder.py       # Build prompts and handle sources
 │   ├── retriever.py            # Retrieve relevant contexts
 │   └── vector_store.py         # Chroma vector store wrapper
@@ -236,6 +240,58 @@ The smoke script is only for manual verification.
 
 It does not automatically ingest documents, rebuild the database, delete the database, or hardcode API keys.
 
+
+## Ask Questions from FastAPI
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Start the local API service:
+
+```bash
+uvicorn app.api:app --reload
+```
+
+Open the generated API docs:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Check service health:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Ask a question:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "你的问题"}'
+```
+
+The API default `top_k` is `4`, matching the CLI default. You can override it per request:
+
+```json
+{
+  "question": "RAG是什么？",
+  "top_k": 3
+}
+```
+
+Important:
+
+```text
+POST /ask only answers from the existing vector database.
+After adding, deleting, or changing files in data/raw/, run python scripts/ingest.py again.
+GET /health only means the API service started. It does not verify the DeepSeek API key or vector database data.
+```
+
 ## Run Tests
 
 Run all tests:
@@ -248,9 +304,10 @@ Run a specific test file:
 
 ```bash
 python -m pytest tests/test_ask_cli.py
+python -m pytest tests/test_api.py
 ```
 
-The CLI tests use fake pipelines and do not call the real DeepSeek API or real Chroma vector database.
+The CLI and API tests use fake pipelines and do not call the real DeepSeek API or real Chroma vector database.
 
 ## Git Ignore Policy
 
@@ -380,12 +437,12 @@ Implemented:
 - Source citation fallback
 - Real API smoke test
 - Formal CLI question-answering entrypoint
+- FastAPI backend service
 - Unit tests
 
 Not implemented yet:
 
 - Web frontend
-- FastAPI backend service
 - Evaluation dataset
 - Reranking
 - Hybrid retrieval
@@ -399,14 +456,13 @@ Possible next steps:
 
 ```text
 1. Add a Streamlit frontend
-2. Add a FastAPI /ask endpoint
-3. Add evaluation questions and an eval script
-4. Add logging and debug mode
-5. Add query rewriting
-6. Add reranking
-7. Add hybrid search
-8. Add Docker support
-9. Add GitHub Actions CI
+2. Add evaluation questions and an eval script
+3. Add logging and debug mode
+4. Add query rewriting
+5. Add reranking
+6. Add hybrid search
+7. Add Docker support
+8. Add GitHub Actions CI
 ```
 
 ## Purpose

@@ -12,25 +12,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.config import VECTOR_COLLECTION_NAME, VECTOR_DB_PATH
-from app.embeddings import Embedder
-from app.generator import (
-    DeepSeekGenerator,
-    MissingAPIKeyError,
-    load_deepseek_config_from_env,
-)
-from app.pipeline import RAGPipeline
+from app.config import DEFAULT_TOP_K
+from app.generator import MissingAPIKeyError
+from app.pipeline_factory import VectorStoreNotReadyError, build_default_pipeline
 
 try:
     from app.prompt_builder import extract_context_text as _prompt_extract_context_text
 except ImportError:
     _prompt_extract_context_text = None
 
-from app.retriever import Retriever
-from app.vector_store import ChromaVectorStore
-
-
-DEFAULT_TOP_K = 4
 CONTEXT_PREVIEW_CHARS = 300
 EXIT_COMMANDS = {"exit", "quit", "q"}
 SOURCE_FIELDS = ("source", "file_path", "filename", "path", "title")
@@ -43,10 +33,6 @@ class AskCLIError(Exception):
 
 class EmptyQuestionError(AskCLIError):
     """Raised when the user provides a blank question."""
-
-
-class VectorStoreNotReadyError(AskCLIError):
-    """Raised when the local vector database is missing or empty."""
 
 
 def positive_int(value: str) -> int:
@@ -85,40 +71,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Do not print an extra sources section from result.sources.",
     )
     return parser.parse_args(argv)
-
-
-def build_default_pipeline(top_k: int) -> RAGPipeline:
-    _validate_top_k(top_k)
-    config = load_deepseek_config_from_env()
-    persist_path = _resolved_vector_db_path()
-    if not persist_path.exists():
-        raise VectorStoreNotReadyError("请先运行 scripts/ingest.py")
-
-    embedder = Embedder()
-    vector_store = ChromaVectorStore(
-        collection_name=VECTOR_COLLECTION_NAME,
-        persist_path=str(persist_path),
-    )
-    try:
-        count = _get_vector_store_count(vector_store)
-        if count == 0:
-            raise VectorStoreNotReadyError("请先运行 scripts/ingest.py")
-
-        retriever_kwargs = {
-            "embedder": embedder,
-            "vector_store": vector_store,
-        }
-        if not _pipeline_type_supports_top_k(RAGPipeline):
-            retriever_kwargs["default_top_k"] = top_k
-
-        retriever = Retriever(**retriever_kwargs)
-        generator = DeepSeekGenerator(config=config)
-        return RAGPipeline(retriever=retriever, generator=generator)
-    except Exception:
-        close = getattr(vector_store, "close", None)
-        if callable(close):
-            close()
-        raise
 
 
 def format_result(
@@ -285,33 +237,6 @@ def _call_pipeline(pipeline: Any, question: str, *, top_k: int) -> Any:
     raise RuntimeError("RAG pipeline must provide ask(), run(), or query()")
 
 
-def _get_vector_store_count(vector_store: Any) -> int | None:
-    count = getattr(vector_store, "count", None)
-    if callable(count):
-        try:
-            return int(count())
-        except Exception:
-            return None
-
-    collection = getattr(vector_store, "collection", None)
-    collection_count = getattr(collection, "count", None)
-    if callable(collection_count):
-        try:
-            return int(collection_count())
-        except Exception:
-            return None
-
-    return None
-
-
-def _pipeline_type_supports_top_k(pipeline_type: Any) -> bool:
-    for method_name in ("ask", "run", "query"):
-        method = getattr(pipeline_type, method_name, None)
-        if callable(method):
-            return _callable_supports_top_k(method)
-    return False
-
-
 def _callable_supports_top_k(callable_object: Any) -> bool:
     try:
         signature = inspect.signature(callable_object)
@@ -466,13 +391,6 @@ def _display_value(value: Any) -> str | None:
         clean_value = value.strip()
         return clean_value or None
     return str(value)
-
-
-def _resolved_vector_db_path() -> Path:
-    path = Path(VECTOR_DB_PATH)
-    if path.is_absolute():
-        return path
-    return PROJECT_ROOT / path
 
 
 def _system_exit_code(error: SystemExit) -> int:

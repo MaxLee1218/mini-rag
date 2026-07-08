@@ -22,6 +22,9 @@ python-docx
 
 # Web app / demo UI
 streamlit
+fastapi
+uvicorn[standard]
+httpx
 
 # Data processing
 numpy
