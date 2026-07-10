@@ -228,3 +228,64 @@ class _FailingPipeline:
         raise RuntimeError(
             "boom with key sk-secret and path C:\\Users\\mingx\\project\\.env"
         )
+
+
+def test_ask_logs_success(monkeypatch):
+    from uuid import UUID
+
+    import app.api as api_module
+
+    logged_entries = []
+    monkeypatch.setattr(api_module, "log_request", logged_entries.append)
+    api_module.app.dependency_overrides[api_module.get_pipeline] = lambda: _FakePipeline(
+        SimpleNamespace(
+            question="What is RAG?",
+            answer="RAG means Retrieval-Augmented Generation.",
+            sources=["rag_notes.md"],
+            contexts=[],
+        )
+    )
+    try:
+        response = TestClient(api_module.app).post(
+            "/ask", json={"question": "What is RAG?"}
+        )
+    finally:
+        api_module.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert len(logged_entries) == 1
+    log_entry = logged_entries[0]
+    assert log_entry["question"] == "What is RAG?"
+    assert log_entry["answer"] == "RAG means Retrieval-Augmented Generation."
+    assert log_entry["sources"] == ["rag_notes.md"]
+    assert log_entry["status"] == "success"
+    assert log_entry["error_type"] is None
+    assert isinstance(log_entry["latency_ms"], int)
+    assert UUID(log_entry["request_id"]).version == 4
+
+
+def test_ask_logs_error_without_sensitive_exception_details(monkeypatch):
+    import json
+
+    import app.api as api_module
+
+    logged_entries = []
+    monkeypatch.setattr(api_module, "log_request", logged_entries.append)
+    api_module.app.dependency_overrides[api_module.get_pipeline] = _FailingPipeline
+    try:
+        response = TestClient(api_module.app).post(
+            "/ask", json={"question": "What is RAG?"}
+        )
+    finally:
+        api_module.app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "RAG pipeline failed."}
+    assert len(logged_entries) == 1
+    log_entry = logged_entries[0]
+    assert log_entry["question"] == "What is RAG?"
+    assert log_entry["answer"] == ""
+    assert log_entry["sources"] == []
+    assert log_entry["status"] == "error"
+    assert log_entry["error_type"] == "RuntimeError"
+    assert "sk-secret" not in json.dumps(log_entry)

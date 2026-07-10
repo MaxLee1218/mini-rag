@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = PROJECT_ROOT / ".env"
+LOG_DIR = PROJECT_ROOT / "logs"
+LOG_FILE = LOG_DIR / "rag_requests.jsonl"
 
 if os.getenv("MINI_RAG_SKIP_DOTENV") != "1":
     load_dotenv(ENV_PATH)

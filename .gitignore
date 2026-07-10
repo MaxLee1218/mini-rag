@@ -226,3 +226,5 @@ data/raw/private/
 
 # Local Hugging Face models
 models/
+# Runtime request logs
+logs/*.jsonl

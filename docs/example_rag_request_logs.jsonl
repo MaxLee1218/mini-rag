@@ -1,0 +1,2 @@
+{"timestamp":"2026-07-10T10:00:00+00:00","request_id":"00000000-0000-4000-8000-000000000001","question":"What is RAG?","answer":"RAG means Retrieval-Augmented Generation.","sources":["rag_notes.md"],"latency_ms":1234,"status":"success","error_type":null}
+{"timestamp":"2026-07-10T10:00:01+00:00","request_id":"00000000-0000-4000-8000-000000000002","question":"What is RAG?","answer":"","sources":[],"latency_ms":42,"status":"error","error_type":"RuntimeError"}

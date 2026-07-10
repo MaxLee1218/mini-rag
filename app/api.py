@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
+from uuid import uuid4
 from collections.abc import Mapping
 from typing import Any
 
@@ -9,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException
 
 from app.config import DEFAULT_TOP_K
 from app.generator import MissingAPIKeyError
+from app.logging_utils import RequestLog, log_request
 from app.pipeline import RAGPipeline
 from app.pipeline_factory import VectorStoreNotReadyError, build_default_pipeline
 from app.schemas import AskRequest, AskResponse, HealthResponse, Source
@@ -70,35 +73,59 @@ def ask(
 ) -> AskResponse:
     resolved_top_k = DEFAULT_TOP_K if request.top_k is None else request.top_k
     started_at = time.perf_counter()
+    log_entry: RequestLog = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "request_id": str(uuid4()),
+        "question": request.question,
+        "answer": "",
+        "sources": [],
+        "latency_ms": 0,
+        "status": "error",
+        "error_type": None,
+    }
 
     try:
         result = pipeline.ask(request.question, top_k=resolved_top_k)
+        response_sources = normalize_sources(result)
+        answer = _display_value(_get_value(result, "answer")) or ""
+        latency_ms = int(round((time.perf_counter() - started_at) * 1000))
+        response = AskResponse(
+            question=_display_value(_get_value(result, "question")) or request.question,
+            answer=answer,
+            sources=response_sources,
+            latency_ms=latency_ms,
+        )
+        log_entry["answer"] = answer
+        log_entry["sources"] = [
+            source.source for source in response_sources if source.source is not None
+        ]
+        log_entry["status"] = "success"
+        return response
     except ValueError as error:
+        log_entry["error_type"] = type(error).__name__
         logger.exception("Invalid RAG request.")
         raise HTTPException(status_code=400, detail="Invalid RAG request.") from error
     except MissingAPIKeyError as error:
+        log_entry["error_type"] = type(error).__name__
         logger.exception("DeepSeek API key is not configured.")
         raise HTTPException(
             status_code=500,
             detail="DeepSeek API key is not configured.",
         ) from error
     except VectorStoreNotReadyError as error:
+        log_entry["error_type"] = type(error).__name__
         logger.exception("Vector store is not ready.")
         raise HTTPException(
             status_code=503,
             detail="Vector store is not ready. Please run scripts/ingest.py first.",
         ) from error
     except Exception as error:
+        log_entry["error_type"] = type(error).__name__
         logger.exception("RAG pipeline failed.")
         raise HTTPException(status_code=500, detail="RAG pipeline failed.") from error
-
-    latency_ms = (time.perf_counter() - started_at) * 1000
-    return AskResponse(
-        question=_display_value(_get_value(result, "question")) or request.question,
-        answer=_display_value(_get_value(result, "answer")) or "",
-        sources=normalize_sources(result),
-        latency_ms=latency_ms,
-    )
+    finally:
+        log_entry["latency_ms"] = int(round((time.perf_counter() - started_at) * 1000))
+        log_request(log_entry)
 
 
 def normalize_sources(result: Any) -> list[Source]:

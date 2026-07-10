@@ -474,3 +474,18 @@ The goal is not to rely on a high-level RAG framework immediately, but to unders
 ```text
 loading → chunking → embedding → vector storage → retrieval → prompting → generation → sources → user entrypoint
 ```
+
+
+## Request Logs
+
+`POST /ask` appends one JSON object per request to `logs/rag_requests.jsonl`.
+The file is ignored by Git because it may contain user questions and model answers.
+
+A synthetic success and error example is available at
+`docs/example_rag_request_logs.jsonl`.
+
+View recent local logs in PowerShell:
+
+```powershell
+Get-Content logs/rag_requests.jsonl
+```
