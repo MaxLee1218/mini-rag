@@ -29,6 +29,7 @@ httpx
 # Data processing
 numpy
 pandas
+rank-bm25
 
 # Utilities
 tiktoken

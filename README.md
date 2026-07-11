@@ -489,3 +489,20 @@ View recent local logs in PowerShell:
 ```powershell
 Get-Content logs/rag_requests.jsonl
 ```
+
+## BM25 Retrieval
+
+BM25 is a sparse retrieval algorithm that ranks document chunks by keyword relevance. It runs independently from the existing embedding and Chroma-based dense retrieval pipeline.
+
+The project currently supports:
+
+- Dense Retrieval (Embedding + Chroma)
+- Sparse Retrieval (BM25)
+
+Run the standalone BM25 smoke test from the project root:
+
+```bash
+python scripts/smoke_bm25.py
+```
+
+The smoke test uses local in-memory chunks and does not call the API, an LLM, or ChromaDB.
