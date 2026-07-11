@@ -36,11 +36,18 @@ class Retriever:
             else self._validate_top_k(top_k, field_name="top_k")
         )
         query_embedding = self.embedder.embed_query(clean_query)
-        return self.vector_store.query(
+        results = self.vector_store.query(
             query_embedding,
             top_k=resolved_top_k,
             where=where,
         )
+        return [self._with_similarity_score(result) for result in results]
+
+    def _with_similarity_score(self, result: Mapping[str, Any]) -> dict[str, Any]:
+        copied_result = dict(result)
+        if "distance" in copied_result:
+            copied_result["score"] = 1.0 - float(copied_result["distance"])
+        return copied_result
 
     def retrieve_texts(
         self,

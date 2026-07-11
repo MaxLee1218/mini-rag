@@ -29,6 +29,10 @@ def _parse_float_env(name: str, default: float) -> float:
 VECTOR_DB_PATH = "data/chroma"
 VECTOR_COLLECTION_NAME = "mini_rag_chunks"
 DEFAULT_TOP_K = 4
+HYBRID_SPARSE_WEIGHT = 0.5
+HYBRID_DENSE_WEIGHT = 0.5
+HYBRID_TOP_K = 5
+HYBRID_CANDIDATE_MULTIPLIER = 2
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
@@ -57,4 +61,3 @@ def require_openai_api_key() -> str:
             "based on .env.example and set your OpenAI API key."
         )
     return OPENAI_API_KEY.strip()
-

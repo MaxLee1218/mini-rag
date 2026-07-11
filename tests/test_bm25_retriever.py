@@ -3,8 +3,15 @@ from app.bm25_retriever import BM25Retriever, tokenize
 
 def sample_documents():
     return [
-        {"text": "RAG使用embedding检索", "metadata": {"source": "rag.md"}},
-        {"text": "数据库用于保存数据", "metadata": {"source": "database.md"}},
+        {
+            "id": "rag-0",
+            "text": "RAG使用embedding检索",
+            "metadata": {"source": "rag.md", "chunk_id": 0},
+        },
+        {
+            "text": "数据库用于保存数据",
+            "metadata": {"source": "database.md", "chunk_id": 1},
+        },
         {"text": "Python是一种编程语言", "metadata": {"source": "python.md"}},
     ]
 
@@ -20,6 +27,31 @@ def test_retrieve_returns_keyword_match_first():
     assert results[0]["metadata"]["source"] == "python.md"
     assert isinstance(results[0]["score"], float)
     assert results[0]["score"] > 0
+
+
+def test_retrieve_resolves_stable_ids_without_changing_raw_scores():
+    retriever = BM25Retriever(sample_documents())
+
+    first = retriever.retrieve("RAG", top_k=3)
+    second = retriever.retrieve("RAG", top_k=3)
+
+    results_by_source = {result["metadata"]["source"]: result for result in first}
+    assert results_by_source["rag.md"]["id"] == "rag-0"
+    assert results_by_source["database.md"]["id"] == "database.md:1"
+    assert results_by_source["python.md"]["id"] == next(
+        result["id"]
+        for result in second
+        if result["metadata"]["source"] == "python.md"
+    )
+    raw_scores = retriever.bm25.get_scores(["rag"])
+    expected_by_source = {
+        document["metadata"]["source"]: float(raw_scores[index])
+        for index, document in enumerate(retriever.documents)
+    }
+    assert all(
+        result["score"] == expected_by_source[result["metadata"]["source"]]
+        for result in first
+    )
 
 
 def test_retrieve_respects_top_k():

@@ -110,14 +110,18 @@ def test_retrieve_uses_default_top_k_when_top_k_is_not_provided():
     assert vector_store.received_top_k == 3
 
 
-def test_retrieve_returns_exact_vector_store_result_object_unchanged():
+def test_retrieve_adds_similarity_score_without_mutating_source_results():
     results = make_results()
     retriever, _, _ = make_retriever(results=results)
 
     retrieved = retriever.retrieve("What is RAG?")
 
-    assert retrieved is results
-    assert retrieved == make_results()
+    assert retrieved is not results
+    assert retrieved[0] is not results[0]
+    assert retrieved[0]["distance"] == 0.1
+    assert retrieved[0]["score"] == pytest.approx(0.9)
+    assert retrieved[1]["score"] == pytest.approx(0.8)
+    assert results == make_results()
 
 
 def test_retrieve_preserves_vector_store_error():

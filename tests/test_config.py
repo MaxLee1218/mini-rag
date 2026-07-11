@@ -36,6 +36,10 @@ def test_config_uses_defaults_without_api_keys(monkeypatch):
     assert config.DEEPSEEK_TIMEOUT == 30.0
     assert config.OPENAI_API_KEY is None
     assert config.OPENAI_MODEL == "gpt-4o-mini"
+    assert config.HYBRID_SPARSE_WEIGHT == 0.5
+    assert config.HYBRID_DENSE_WEIGHT == 0.5
+    assert config.HYBRID_TOP_K == 5
+    assert config.HYBRID_CANDIDATE_MULTIPLIER == 2
 
 
 def test_config_reads_environment_overrides(monkeypatch):

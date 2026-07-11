@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 import numpy as np
+import pytest
 
 from app.embeddings import Embedder
 from app.retriever import Retriever
@@ -64,7 +65,14 @@ def test_retriever_uses_real_embedder_and_vector_store_with_fake_model():
 
         assert len(results) >= 1
         assert results[0]["id"] == "chunk-rag"
-        assert list(results[0].keys()) == ["id", "text", "metadata", "distance"]
+        assert list(results[0].keys()) == [
+            "id",
+            "text",
+            "metadata",
+            "distance",
+            "score",
+        ]
+        assert results[0]["score"] == pytest.approx(1.0 - results[0]["distance"])
         assert "RAG uses retrieval" in context
         assert "chunk-rag" in context
         assert "rag.md" in context

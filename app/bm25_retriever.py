@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -44,9 +45,27 @@ class BM25Retriever:
 
         return [
             {
+                "id": self._stable_id(self.documents[index]),
                 "text": self.documents[index].get("text", ""),
                 "metadata": dict(self.documents[index].get("metadata") or {}),
                 "score": float(scores[index]),
             }
             for index in ranked_indices[:top_k]
         ]
+
+    def _stable_id(self, document: Mapping[str, Any]) -> str:
+        document_id = document.get("id")
+        if document_id is not None and str(document_id).strip():
+            return str(document_id).strip()
+
+        metadata = document.get("metadata") or {}
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+        source = str(metadata.get("source") or "").strip()
+        chunk_id = metadata.get("chunk_id")
+        if source and chunk_id is not None and str(chunk_id).strip():
+            return f"{source}:{str(chunk_id).strip()}"
+
+        text = str(document.get("text") or "")
+        digest = sha256(f"{source}\0{text}".encode("utf-8")).hexdigest()
+        return f"legacy:{digest}"
