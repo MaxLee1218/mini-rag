@@ -228,3 +228,5 @@ data/raw/private/
 models/
 # Runtime request logs
 logs/*.jsonl
+
+docs/superpowers
