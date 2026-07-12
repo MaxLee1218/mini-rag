@@ -16,6 +16,12 @@ class RequestLog(TypedDict):
     latency_ms: int
     status: Literal["success", "error"]
     error_type: str | None
+    session_id: str
+    original_question: str
+    rewritten_query: str
+    query_was_rewritten: bool
+    rewrite_reason: str
+    history_turn_count: int
 
 
 def log_request(log_entry: RequestLog, log_file: Path | None = None) -> None:

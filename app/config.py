@@ -51,6 +51,28 @@ def _parse_positive_int_env(name: str, default: int) -> int:
     return parsed
 
 
+def _parse_bounded_int_env(
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise RuntimeError(
+            f"{name} must be an integer between {minimum} and {maximum}"
+        ) from error
+    if not minimum <= parsed <= maximum:
+        raise RuntimeError(
+            f"{name} must be between {minimum} and {maximum}"
+        )
+    return parsed
+
+
 def _parse_choice_env(name: str, default: str, choices: tuple[str, ...]) -> str:
     value = os.getenv(name, default).strip().lower()
     if value not in choices:
@@ -72,6 +94,17 @@ HYBRID_SPARSE_WEIGHT = 0.5
 HYBRID_DENSE_WEIGHT = 0.5
 HYBRID_TOP_K = 5
 HYBRID_CANDIDATE_MULTIPLIER = 2
+
+CONVERSATION_HISTORY_LIMIT = _parse_bounded_int_env(
+    "CONVERSATION_HISTORY_LIMIT", 5, 3, 5
+)
+QUERY_REWRITE_ENABLED = _parse_bool_env("QUERY_REWRITE_ENABLED", True)
+QUERY_REWRITE_PROVIDER = _parse_choice_env(
+    "QUERY_REWRITE_PROVIDER", "deepseek", ("deepseek",)
+)
+QUERY_REWRITE_TIMEOUT = _parse_float_env("QUERY_REWRITE_TIMEOUT", 10.0)
+if QUERY_REWRITE_TIMEOUT <= 0:
+    raise RuntimeError("QUERY_REWRITE_TIMEOUT must be positive")
 
 RERANKER_ENABLED = _parse_bool_env("RERANKER_ENABLED", True)
 RERANKER_MODEL = _parse_nonblank_env(

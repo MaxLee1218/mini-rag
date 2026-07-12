@@ -46,20 +46,34 @@ class RAGPipeline:
         self.candidate_k = _validate_named_top_k(candidate_k, "candidate_k")
         self.final_top_k = _validate_named_top_k(final_top_k, "final_top_k")
 
-    def ask(self, question: str, top_k: int | None = None) -> RAGResult:
+    def ask(
+        self,
+        question: str,
+        top_k: int | None = None,
+        *,
+        retrieval_query: str | None = None,
+    ) -> RAGResult:
         clean_question = _validate_question(question)
+        query_for_retrieval = _resolve_retrieval_query(
+            retrieval_query,
+            clean_question,
+        )
         resolved_top_k = (
             self.final_top_k if top_k is None else _validate_top_k(top_k)
         )
         retrieval_top_k = max(self.candidate_k, resolved_top_k)
 
         candidates = _normalize_contexts(
-            self.retriever.retrieve(clean_question, top_k=retrieval_top_k)
+            self.retriever.retrieve(query_for_retrieval, top_k=retrieval_top_k)
         )[:retrieval_top_k]
         contexts = self._select_contexts(
-            clean_question, candidates, top_k=resolved_top_k
+            query_for_retrieval, candidates, top_k=resolved_top_k
         )
-        prompt = self._build_prompt(clean_question, contexts)
+        generation_question = _build_generation_question(
+            clean_question,
+            query_for_retrieval,
+        )
+        prompt = self._build_prompt(generation_question, contexts)
         raw_answer = self._generate(prompt)
 
         final_answer = raw_answer
@@ -117,6 +131,29 @@ def _validate_question(question: Any) -> str:
     if not isinstance(question, str) or not question.strip():
         raise ValueError("question must not be blank")
     return question.strip()
+
+
+def _resolve_retrieval_query(retrieval_query: Any, question: str) -> str:
+    if retrieval_query is None:
+        return question
+    if not isinstance(retrieval_query, str):
+        raise ValueError("retrieval_query must be a string")
+    return retrieval_query.strip() or question
+
+
+def _build_generation_question(
+    original_question: str,
+    resolved_question: str,
+) -> str:
+    if resolved_question == original_question:
+        return original_question
+    return (
+        f"Original question:\n{original_question}\n\n"
+        "Resolved question for disambiguation:\n"
+        f"{resolved_question}\n\n"
+        "Answer the original question. Use the resolved question only to "
+        "identify references from the conversation."
+    )
 
 
 def _validate_top_k(top_k: Any) -> int:

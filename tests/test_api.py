@@ -4,7 +4,20 @@ import importlib
 import builtins
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
+import pytest
+
+from tests.asgi_client import asgi_request
+
+
+@pytest.fixture(autouse=True)
+def use_offline_identity_query_rewriter(monkeypatch):
+    """Keep API tests deterministic and independent of provider credentials."""
+    from app.dependencies import query_rewriter
+
+    def complete(prompt):
+        return prompt.split("当前问题：\n", 1)[1].split("\n\n", 1)[0]
+
+    monkeypatch.setattr(query_rewriter, "_completion_call", complete)
 
 
 def test_importing_api_does_not_build_real_pipeline(monkeypatch):
@@ -51,7 +64,7 @@ def test_health_returns_service_status():
 
     app.dependency_overrides[get_pipeline] = lambda: _FakePipeline()
     try:
-        response = TestClient(app).get("/health")
+        response = asgi_request(app, "GET", "/health")
     finally:
         app.dependency_overrides.clear()
 
@@ -76,7 +89,12 @@ def test_ask_returns_answer_sources_and_latency():
     )
     app.dependency_overrides[get_pipeline] = lambda: fake_pipeline
     try:
-        response = TestClient(app).post("/ask", json={"question": "RAG是什么？"})
+        response = asgi_request(
+            app,
+            "POST",
+            "/ask",
+            json={"question": "RAG是什么？", "session_id": "api-answer"},
+        )
     finally:
         app.dependency_overrides.clear()
 
@@ -94,7 +112,13 @@ def test_ask_returns_answer_sources_and_latency():
     ]
     assert isinstance(body["latency_ms"], float)
     assert body["latency_ms"] >= 0
-    assert fake_pipeline.calls == [{"question": "RAG是什么？", "top_k": 5}]
+    assert fake_pipeline.calls == [
+        {
+            "question": "RAG是什么？",
+            "top_k": 5,
+            "retrieval_query": "RAG是什么？",
+        }
+    ]
 
 
 def test_ask_passes_requested_top_k_to_pipeline():
@@ -103,15 +127,23 @@ def test_ask_passes_requested_top_k_to_pipeline():
     fake_pipeline = _FakePipeline()
     app.dependency_overrides[get_pipeline] = lambda: fake_pipeline
     try:
-        response = TestClient(app).post(
+        response = asgi_request(
+            app,
+            "POST",
             "/ask",
-            json={"question": "RAG是什么？", "top_k": 3},
+            json={"question": "RAG是什么？", "top_k": 3, "session_id": "api-top-k"},
         )
     finally:
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert fake_pipeline.calls == [{"question": "RAG是什么？", "top_k": 3}]
+    assert fake_pipeline.calls == [
+        {
+            "question": "RAG是什么？",
+            "top_k": 3,
+            "retrieval_query": "RAG是什么？",
+        }
+    ]
 
 
 def test_ask_rejects_blank_question():
@@ -119,7 +151,12 @@ def test_ask_rejects_blank_question():
 
     app.dependency_overrides[get_pipeline] = lambda: _FakePipeline()
     try:
-        response = TestClient(app).post("/ask", json={"question": "   "})
+        response = asgi_request(
+            app,
+            "POST",
+            "/ask",
+            json={"question": "   ", "session_id": "api-blank"},
+        )
     finally:
         app.dependency_overrides.clear()
 
@@ -131,9 +168,11 @@ def test_ask_rejects_invalid_top_k():
 
     app.dependency_overrides[get_pipeline] = lambda: _FakePipeline()
     try:
-        response = TestClient(app).post(
+        response = asgi_request(
+            app,
+            "POST",
             "/ask",
-            json={"question": "RAG是什么？", "top_k": 21},
+            json={"question": "RAG是什么？", "top_k": 21, "session_id": "api-invalid-k"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -146,7 +185,12 @@ def test_ask_returns_safe_error_when_pipeline_fails():
 
     app.dependency_overrides[get_pipeline] = lambda: _FailingPipeline()
     try:
-        response = TestClient(app).post("/ask", json={"question": "RAG是什么？"})
+        response = asgi_request(
+            app,
+            "POST",
+            "/ask",
+            json={"question": "RAG是什么？", "session_id": "api-fail"},
+        )
     finally:
         app.dependency_overrides.clear()
 
@@ -218,13 +262,19 @@ class _FakePipeline:
         )
         self.calls = []
 
-    def ask(self, question, top_k=None):
-        self.calls.append({"question": question, "top_k": top_k})
+    def ask(self, question, top_k=None, *, retrieval_query=None):
+        self.calls.append(
+            {
+                "question": question,
+                "top_k": top_k,
+                "retrieval_query": retrieval_query,
+            }
+        )
         return self.result
 
 
 class _FailingPipeline:
-    def ask(self, question, top_k=None):
+    def ask(self, question, top_k=None, *, retrieval_query=None):
         raise RuntimeError(
             "boom with key sk-secret and path C:\\Users\\mingx\\project\\.env"
         )
@@ -246,8 +296,11 @@ def test_ask_logs_success(monkeypatch):
         )
     )
     try:
-        response = TestClient(api_module.app).post(
-            "/ask", json={"question": "What is RAG?"}
+        response = asgi_request(
+            api_module.app,
+            "POST",
+            "/ask",
+            json={"question": "What is RAG?", "session_id": "api-log-success"},
         )
     finally:
         api_module.app.dependency_overrides.clear()
@@ -273,8 +326,11 @@ def test_ask_logs_error_without_sensitive_exception_details(monkeypatch):
     monkeypatch.setattr(api_module, "log_request", logged_entries.append)
     api_module.app.dependency_overrides[api_module.get_pipeline] = _FailingPipeline
     try:
-        response = TestClient(api_module.app).post(
-            "/ask", json={"question": "What is RAG?"}
+        response = asgi_request(
+            api_module.app,
+            "POST",
+            "/ask",
+            json={"question": "What is RAG?", "session_id": "api-log-error"},
         )
     finally:
         api_module.app.dependency_overrides.clear()
@@ -289,3 +345,33 @@ def test_ask_logs_error_without_sensitive_exception_details(monkeypatch):
     assert log_entry["status"] == "error"
     assert log_entry["error_type"] == "RuntimeError"
     assert "sk-secret" not in json.dumps(log_entry)
+
+
+def test_ask_bounds_question_fields_in_request_log(monkeypatch):
+    import app.api as api_module
+
+    long_question = "问题" * 300
+    logged_entries = []
+    monkeypatch.setattr(api_module, "log_request", logged_entries.append)
+    api_module.app.dependency_overrides[api_module.get_pipeline] = lambda: _FakePipeline(
+        SimpleNamespace(
+            question=long_question,
+            answer="answer",
+            sources=[],
+            contexts=[],
+        )
+    )
+    try:
+        response = asgi_request(
+            api_module.app,
+            "POST",
+            "/ask",
+            json={"question": long_question, "session_id": "api-bounded-log"},
+        )
+    finally:
+        api_module.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert len(logged_entries[0]["question"]) == 500
+    assert len(logged_entries[0]["original_question"]) == 500
+    assert len(logged_entries[0]["rewritten_query"]) == 500

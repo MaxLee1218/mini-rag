@@ -180,6 +180,81 @@ python -m pytest tests/test_reranker.py -q
 python -m pytest -q
 ```
 
+## Conversation Memory and Query Rewriting
+
+`POST /ask` uses `QueryOptimizationMiddleware` before the RAG pipeline. The
+middleware loads the requested session's recent completed turns and calls the
+configured DeepSeek model once to produce a retrieval-ready question. The LLM
+returns an independent rewrite when the question depends on history and returns
+the original question when no rewrite is needed. The original question is
+preserved for the final prompt, response, and request log; only
+`rewritten_query` is passed to retrieval and reranking.
+
+Every `/ask` request requires a nonblank `session_id` of at most 128
+characters. Reuse the same value for follow-up questions:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/ask" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "demo-user-001",
+    "question": "什么是 Middleware？"
+  }'
+```
+
+Second round:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/ask" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "demo-user-001",
+    "question": "它为什么可以优化查询？"
+  }'
+```
+
+Conversation history currently uses `InMemoryConversationStore` and keeps the
+latest five completed turns per session by default. History is lost when the
+process restarts and is not shared between multiple worker processes. A future
+MySQL implementation can implement the stable `ConversationStore` interface
+without changing middleware or API orchestration.
+
+Configuration:
+
+```env
+CONVERSATION_HISTORY_LIMIT=5
+QUERY_REWRITE_ENABLED=true
+QUERY_REWRITE_PROVIDER=deepseek
+QUERY_REWRITE_TIMEOUT=10.0
+```
+
+`CONVERSATION_HISTORY_LIMIT` must be between 3 and 5. Disabling rewriting keeps
+the session contract but sends the original question to retrieval without an
+extra DeepSeek call. When rewriting is enabled, each valid `/ask` request adds
+one DeepSeek API call and therefore adds latency and provider usage. A missing
+key, timeout, provider error, or invalid rewrite output safely falls back to the
+original question instead of failing the RAG request.
+
+The current CLI entrypoints call `RAGPipeline` directly and do not pass through
+the FastAPI middleware, so their questions are not conversation-rewritten.
+
+Run focused and complete offline tests with the project virtual environment:
+
+```bash
+.venv/bin/python -m pytest tests/test_conversation_memory_store.py -q
+.venv/bin/python -m pytest tests/test_query_rewriter.py -q
+.venv/bin/python -m pytest tests/test_query_optimization_middleware.py -q
+.venv/bin/python -m pytest tests/test_api_conversation.py -q
+.venv/bin/python -m pytest -q
+```
+
+Run the deterministic conversation smoke check without an API key, model
+download, vector database, or network access:
+
+```bash
+.venv/bin/python scripts/smoke_conversation.py --mock
+```
+
 An opt-in real-model check uses English retrieval examples:
 
 ```bash
@@ -503,7 +578,6 @@ Not implemented yet:
 - Evaluation dataset
 - Reranking
 - Hybrid retrieval
-- Multi-turn conversation memory
 - Docker deployment
 - CI pipeline
 
@@ -515,11 +589,8 @@ Possible next steps:
 1. Add a Streamlit frontend
 2. Add evaluation questions and an eval script
 3. Add logging and debug mode
-4. Add query rewriting
-5. Add reranking
-6. Add hybrid search
-7. Add Docker support
-8. Add GitHub Actions CI
+4. Add Docker support
+5. Add GitHub Actions CI
 ```
 
 ## Purpose

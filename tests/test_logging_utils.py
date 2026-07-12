@@ -16,6 +16,12 @@ def _request_log(*, status: str = "success", error_type: str | None = None) -> R
         "latency_ms": 1234,
         "status": status,
         "error_type": error_type,
+        "session_id": "session-1",
+        "original_question": "What is RAG?",
+        "rewritten_query": "What is RAG?",
+        "query_was_rewritten": False,
+        "rewrite_reason": "independent_query",
+        "history_turn_count": 0,
     }
 
 

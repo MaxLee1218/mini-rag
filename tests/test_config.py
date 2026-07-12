@@ -19,6 +19,10 @@ CONFIG_ENV_KEYS = (
     "RERANKER_DEVICE",
     "RERANKER_FAILURE_MODE",
     "RERANKER_LOCAL_FILES_ONLY",
+    "CONVERSATION_HISTORY_LIMIT",
+    "QUERY_REWRITE_ENABLED",
+    "QUERY_REWRITE_PROVIDER",
+    "QUERY_REWRITE_TIMEOUT",
 )
 
 
@@ -50,6 +54,42 @@ def test_config_uses_defaults_without_api_keys(monkeypatch):
     assert config.HYBRID_DENSE_WEIGHT == 0.5
     assert config.HYBRID_TOP_K == 5
     assert config.HYBRID_CANDIDATE_MULTIPLIER == 2
+    assert config.CONVERSATION_HISTORY_LIMIT == 5
+    assert config.QUERY_REWRITE_ENABLED is True
+    assert config.QUERY_REWRITE_PROVIDER == "deepseek"
+    assert config.QUERY_REWRITE_TIMEOUT == 10.0
+
+
+def test_query_rewrite_config_reads_environment_overrides(monkeypatch):
+    config = reload_config(
+        monkeypatch,
+        CONVERSATION_HISTORY_LIMIT="3",
+        QUERY_REWRITE_ENABLED="false",
+        QUERY_REWRITE_PROVIDER="deepseek",
+        QUERY_REWRITE_TIMEOUT="2.5",
+    )
+
+    assert config.CONVERSATION_HISTORY_LIMIT == 3
+    assert config.QUERY_REWRITE_ENABLED is False
+    assert config.QUERY_REWRITE_PROVIDER == "deepseek"
+    assert config.QUERY_REWRITE_TIMEOUT == 2.5
+
+
+@pytest.mark.parametrize("value", ["2", "6", "not-an-int"])
+def test_query_rewrite_config_rejects_invalid_history_limit(monkeypatch, value):
+    with pytest.raises(RuntimeError, match="CONVERSATION_HISTORY_LIMIT must be"):
+        reload_config(monkeypatch, CONVERSATION_HISTORY_LIMIT=value)
+
+
+def test_query_rewrite_config_rejects_unsupported_provider(monkeypatch):
+    with pytest.raises(RuntimeError, match="QUERY_REWRITE_PROVIDER must be one of"):
+        reload_config(monkeypatch, QUERY_REWRITE_PROVIDER="rule_based")
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_query_rewrite_config_rejects_non_positive_timeout(monkeypatch, value):
+    with pytest.raises(RuntimeError, match="QUERY_REWRITE_TIMEOUT must be positive"):
+        reload_config(monkeypatch, QUERY_REWRITE_TIMEOUT=value)
 
 
 def test_config_reads_environment_overrides(monkeypatch):

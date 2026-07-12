@@ -7,11 +7,23 @@ from uuid import uuid4
 from collections.abc import Mapping
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 
-from app.config import DEFAULT_TOP_K
+from app.config import (
+    CONVERSATION_HISTORY_LIMIT,
+    DEFAULT_TOP_K,
+    QUERY_REWRITE_ENABLED,
+)
+from app.conversation.models import ConversationTurn
+from app.conversation.store import ConversationStore
+from app.dependencies import (
+    conversation_store,
+    get_conversation_store,
+    query_rewriter,
+)
 from app.generator import MissingAPIKeyError
 from app.logging_utils import RequestLog, log_request
+from app.middleware.query_optimization import QueryOptimizationMiddleware
 from app.pipeline import RAGPipeline
 from app.pipeline_factory import VectorStoreNotReadyError, build_default_pipeline
 from app.schemas import AskRequest, AskResponse, HealthResponse, Source
@@ -27,6 +39,14 @@ app = FastAPI(
     title="mini-rag API",
     description="FastAPI service for the mini-rag project",
     version=API_VERSION,
+)
+app.add_middleware(
+    QueryOptimizationMiddleware,
+    conversation_store=conversation_store,
+    query_rewriter=query_rewriter,
+    history_limit=CONVERSATION_HISTORY_LIMIT,
+    enabled=QUERY_REWRITE_ENABLED,
+    paths={"/ask"},
 )
 _pipeline: RAGPipeline | None = None
 
@@ -68,32 +88,76 @@ def health() -> HealthResponse:
 
 @app.post("/ask", response_model=AskResponse)
 def ask(
-    request: AskRequest,
+    payload: AskRequest,
+    http_request: Request,
     pipeline: RAGPipeline = Depends(get_pipeline),
+    store: ConversationStore = Depends(get_conversation_store),
 ) -> AskResponse:
-    resolved_top_k = DEFAULT_TOP_K if request.top_k is None else request.top_k
+    resolved_top_k = DEFAULT_TOP_K if payload.top_k is None else payload.top_k
+    original_question = getattr(
+        http_request.state,
+        "original_question",
+        payload.question,
+    )
+    rewritten_query = getattr(
+        http_request.state,
+        "rewritten_query",
+        original_question,
+    )
+    query_was_rewritten = getattr(
+        http_request.state,
+        "query_was_rewritten",
+        False,
+    )
+    rewrite_reason = getattr(
+        http_request.state,
+        "query_rewrite_reason",
+        "middleware_state_unavailable",
+    )
+    history = getattr(http_request.state, "conversation_history", [])
     started_at = time.perf_counter()
     log_entry: RequestLog = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "request_id": str(uuid4()),
-        "question": request.question,
+        "question": original_question[:500],
         "answer": "",
         "sources": [],
         "latency_ms": 0,
         "status": "error",
         "error_type": None,
+        "session_id": payload.session_id,
+        "original_question": original_question[:500],
+        "rewritten_query": rewritten_query[:500],
+        "query_was_rewritten": query_was_rewritten,
+        "rewrite_reason": rewrite_reason,
+        "history_turn_count": len(history),
     }
 
     try:
-        result = pipeline.ask(request.question, top_k=resolved_top_k)
+        result = pipeline.ask(
+            original_question,
+            top_k=resolved_top_k,
+            retrieval_query=rewritten_query,
+        )
         response_sources = normalize_sources(result)
         answer = _display_value(_get_value(result, "answer")) or ""
         latency_ms = int(round((time.perf_counter() - started_at) * 1000))
         response = AskResponse(
-            question=_display_value(_get_value(result, "question")) or request.question,
+            question=original_question,
+            rewritten_query=rewritten_query,
+            query_was_rewritten=query_was_rewritten,
             answer=answer,
             sources=response_sources,
             latency_ms=latency_ms,
+            session_id=payload.session_id,
+        )
+        store.append_turn(
+            payload.session_id,
+            ConversationTurn(
+                user_message=original_question,
+                assistant_message=answer,
+                created_at=datetime.now(timezone.utc),
+            ),
         )
         log_entry["answer"] = answer
         log_entry["sources"] = [

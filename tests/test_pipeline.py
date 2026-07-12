@@ -149,6 +149,77 @@ def test_ask_passes_top_k_to_retriever():
     assert retriever.received_top_k == 10
 
 
+def test_ask_uses_retrieval_query_but_preserves_original_question():
+    retriever = FakeRetriever([])
+    prompt_builder = PromptBuilderObject()
+    reranker = FakeReranker(result=[])
+    pipeline = RAGPipeline(
+        retriever=retriever,
+        generator=FakeGenerator(NOT_FOUND),
+        prompt_builder=prompt_builder,
+        reranker=reranker,
+    )
+
+    result = pipeline.ask(
+        "它是什么？",
+        retrieval_query="Middleware 是什么？",
+    )
+
+    assert retriever.received_question == "Middleware 是什么？"
+    assert reranker.calls[0][0] == "Middleware 是什么？"
+    assert "Original question:\n它是什么？" in prompt_builder.received_question
+    assert (
+        "Resolved question for disambiguation:\nMiddleware 是什么？"
+        in prompt_builder.received_question
+    )
+    assert result.question == "它是什么？"
+
+
+def test_generator_prompt_includes_original_and_resolved_query_for_disambiguation():
+    contexts = [
+        {
+            "text": (
+                "Hejunwei is 23 years old. "
+                "laojingqiao is 34 years old."
+            ),
+            "metadata": {"source": "private/personal.txt"},
+        }
+    ]
+    generator = FakeGenerator("laojingqiao is 34 years old [1].")
+    pipeline = RAGPipeline(
+        retriever=FakeRetriever(contexts),
+        generator=generator,
+    )
+
+    result = pipeline.ask(
+        "how old is he?",
+        retrieval_query="how old is laojingqiao?",
+    )
+
+    assert "Original question:\nhow old is he?" in generator.received_prompt
+    assert (
+        "Resolved question for disambiguation:\nhow old is laojingqiao?"
+        in generator.received_prompt
+    )
+    assert result.question == "how old is he?"
+
+
+@pytest.mark.parametrize("retrieval_query", [None, "", "   "])
+def test_ask_falls_back_to_original_for_missing_retrieval_query(retrieval_query):
+    retriever = FakeRetriever([])
+    pipeline = RAGPipeline(retriever=retriever, generator=FakeGenerator(NOT_FOUND))
+    pipeline.ask("什么是 RAG？", retrieval_query=retrieval_query)
+    assert retriever.received_question == "什么是 RAG？"
+
+
+def test_ask_rejects_non_string_retrieval_query():
+    pipeline = RAGPipeline(
+        retriever=FakeRetriever([]), generator=FakeGenerator(NOT_FOUND)
+    )
+    with pytest.raises(ValueError, match="retrieval_query must be a string"):
+        pipeline.ask("问题", retrieval_query=123)
+
+
 def test_pipeline_reranks_candidates_before_prompt_and_limits_results():
     contexts = [
         {"id": str(index), "text": f"text {index}", "metadata": {"source": f"{index}.md"}}
