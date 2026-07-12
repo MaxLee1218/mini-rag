@@ -10,6 +10,15 @@ CONFIG_ENV_KEYS = (
     "DEEPSEEK_TIMEOUT",
     "OPENAI_API_KEY",
     "OPENAI_MODEL",
+    "RERANKER_ENABLED",
+    "RERANKER_MODEL",
+    "RERANKER_TOP_K",
+    "RERANKER_CANDIDATE_K",
+    "RERANKER_BATCH_SIZE",
+    "RERANKER_MAX_LENGTH",
+    "RERANKER_DEVICE",
+    "RERANKER_FAILURE_MODE",
+    "RERANKER_LOCAL_FILES_ONLY",
 )
 
 
@@ -30,6 +39,7 @@ def test_config_uses_defaults_without_api_keys(monkeypatch):
 
     assert config.VECTOR_DB_PATH == "data/chroma"
     assert config.VECTOR_COLLECTION_NAME == "mini_rag_chunks"
+    assert config.DEFAULT_TOP_K == 5
     assert config.DEEPSEEK_API_KEY is None
     assert config.DEEPSEEK_BASE_URL == "https://api.deepseek.com"
     assert config.DEEPSEEK_MODEL == "deepseek-v4-flash"
@@ -90,3 +100,69 @@ def test_require_openai_api_key_present(monkeypatch):
     config = reload_config(monkeypatch, OPENAI_API_KEY="test-openai-key")
 
     assert config.require_openai_api_key() == "test-openai-key"
+
+
+def test_reranker_config_defaults(monkeypatch):
+    config = reload_config(monkeypatch)
+
+    assert config.RERANKER_ENABLED is True
+    assert config.RERANKER_MODEL == "cross-encoder/ms-marco-TinyBERT-L2-v2"
+    assert config.RERANKER_TOP_K == 5
+    assert config.RERANKER_CANDIDATE_K == 10
+    assert config.RERANKER_BATCH_SIZE == 16
+    assert config.RERANKER_MAX_LENGTH == 256
+    assert config.RERANKER_DEVICE == "cpu"
+    assert config.RERANKER_FAILURE_MODE == "fallback"
+    assert config.RERANKER_LOCAL_FILES_ONLY is False
+
+
+def test_reranker_config_reads_local_model_and_options(monkeypatch):
+    config = reload_config(
+        monkeypatch,
+        RERANKER_ENABLED="false",
+        RERANKER_MODEL="./models/ms-marco-TinyBERT-L2-v2",
+        RERANKER_TOP_K="7",
+        RERANKER_CANDIDATE_K="12",
+        RERANKER_BATCH_SIZE="8",
+        RERANKER_MAX_LENGTH="128",
+        RERANKER_DEVICE="auto",
+        RERANKER_LOCAL_FILES_ONLY="true",
+    )
+
+    assert config.RERANKER_ENABLED is False
+    assert config.RERANKER_MODEL == "./models/ms-marco-TinyBERT-L2-v2"
+    assert config.RERANKER_TOP_K == 7
+    assert config.RERANKER_CANDIDATE_K == 12
+    assert config.RERANKER_BATCH_SIZE == 8
+    assert config.RERANKER_MAX_LENGTH == 128
+    assert config.RERANKER_DEVICE == "auto"
+    assert config.RERANKER_LOCAL_FILES_ONLY is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "RERANKER_TOP_K",
+        "RERANKER_CANDIDATE_K",
+        "RERANKER_BATCH_SIZE",
+        "RERANKER_MAX_LENGTH",
+    ],
+)
+@pytest.mark.parametrize("value", ["0", "-1", "not-an-int"])
+def test_reranker_config_rejects_invalid_positive_integers(monkeypatch, name, value):
+    with pytest.raises(RuntimeError, match=rf"{name} must be a positive integer"):
+        reload_config(monkeypatch, **{name: value})
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("RERANKER_ENABLED", "perhaps", "RERANKER_ENABLED must be a boolean"),
+        ("RERANKER_DEVICE", "tpu", "RERANKER_DEVICE must be one of"),
+        ("RERANKER_FAILURE_MODE", "raise", "RERANKER_FAILURE_MODE must be one of"),
+        ("RERANKER_MODEL", "   ", "RERANKER_MODEL must not be blank"),
+    ],
+)
+def test_reranker_config_rejects_invalid_values(monkeypatch, name, value, message):
+    with pytest.raises(RuntimeError, match=message):
+        reload_config(monkeypatch, **{name: value})

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,9 @@ from app.prompt_builder import (
     build_prompt,
     build_sources_section,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -30,18 +34,30 @@ class RAGPipeline:
         generator: Any,
         prompt_builder: Any = build_prompt,
         source_appender: Callable[..., str] = append_sources_to_answer,
+        reranker: Any | None = None,
+        candidate_k: int = 10,
+        final_top_k: int = 5,
     ) -> None:
         self.retriever = retriever
         self.generator = generator
         self.prompt_builder = prompt_builder
         self.source_appender = source_appender
+        self.reranker = reranker
+        self.candidate_k = _validate_named_top_k(candidate_k, "candidate_k")
+        self.final_top_k = _validate_named_top_k(final_top_k, "final_top_k")
 
-    def ask(self, question: str, top_k: int = 4) -> RAGResult:
+    def ask(self, question: str, top_k: int | None = None) -> RAGResult:
         clean_question = _validate_question(question)
-        resolved_top_k = _validate_top_k(top_k)
+        resolved_top_k = (
+            self.final_top_k if top_k is None else _validate_top_k(top_k)
+        )
+        retrieval_top_k = max(self.candidate_k, resolved_top_k)
 
-        contexts = _normalize_contexts(
-            self.retriever.retrieve(clean_question, top_k=resolved_top_k)
+        candidates = _normalize_contexts(
+            self.retriever.retrieve(clean_question, top_k=retrieval_top_k)
+        )[:retrieval_top_k]
+        contexts = self._select_contexts(
+            clean_question, candidates, top_k=resolved_top_k
         )
         prompt = self._build_prompt(clean_question, contexts)
         raw_answer = self._generate(prompt)
@@ -64,6 +80,21 @@ class RAGPipeline:
             ),
             prompt=prompt,
         )
+
+    def _select_contexts(
+        self, question: str, candidates: list[Any], *, top_k: int
+    ) -> list[Any]:
+        if self.reranker is None:
+            return candidates[:top_k]
+        try:
+            return _normalize_contexts(
+                self.reranker.rerank(question, candidates, top_k=top_k)
+            )[:top_k]
+        except Exception:
+            logger.exception(
+                "reranker failed; falling back to original retrieval order"
+            )
+            return candidates[:top_k]
 
     def _build_prompt(self, question: str, contexts: list[Any]) -> str:
         build = getattr(self.prompt_builder, "build", None)
@@ -92,6 +123,12 @@ def _validate_top_k(top_k: Any) -> int:
     if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
         raise ValueError("top_k must be a positive integer")
     return top_k
+
+
+def _validate_named_top_k(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
 
 
 def _normalize_contexts(contexts: Any) -> list[Any]:

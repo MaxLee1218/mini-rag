@@ -8,6 +8,7 @@ def test_default_pipeline_builds_hybrid_retriever_from_stored_chunks(monkeypatch
     import app.config as config
     import app.embeddings as embeddings_module
     import app.generator as generator_module
+    import app.reranker as reranker_module
     import app.vector_store as vector_store_module
 
     class FakeCollection:
@@ -31,6 +32,25 @@ def test_default_pipeline_builds_hybrid_retriever_from_stored_chunks(monkeypatch
     monkeypatch.setattr(config, "HYBRID_SPARSE_WEIGHT", 0.4)
     monkeypatch.setattr(config, "HYBRID_DENSE_WEIGHT", 0.6)
     monkeypatch.setattr(config, "HYBRID_CANDIDATE_MULTIPLIER", 3)
+    monkeypatch.setattr(config, "RERANKER_ENABLED", True)
+    monkeypatch.setattr(config, "RERANKER_MODEL", "./models/test-reranker")
+    monkeypatch.setattr(config, "RERANKER_TOP_K", 5)
+    monkeypatch.setattr(config, "RERANKER_CANDIDATE_K", 10)
+    monkeypatch.setattr(config, "RERANKER_BATCH_SIZE", 16)
+    monkeypatch.setattr(config, "RERANKER_MAX_LENGTH", 256)
+    monkeypatch.setattr(config, "RERANKER_DEVICE", "cpu")
+    monkeypatch.setattr(config, "RERANKER_FAILURE_MODE", "fallback")
+    monkeypatch.setattr(config, "RERANKER_LOCAL_FILES_ONLY", True)
+    reranker_calls = []
+
+    class FakeReranker:
+        def __init__(self, model_name_or_path, **kwargs):
+            reranker_calls.append((model_name_or_path, kwargs))
+
+        def rerank(self, query, documents, top_k=None):
+            return list(documents)[:top_k]
+
+    monkeypatch.setattr(reranker_module, "CrossEncoderReranker", FakeReranker)
     monkeypatch.setattr(embeddings_module, "Embedder", lambda: fake_embedder)
     monkeypatch.setattr(vector_store_module, "ChromaVectorStore", FakeVectorStore)
     monkeypatch.setattr(
@@ -54,3 +74,24 @@ def test_default_pipeline_builds_hybrid_retriever_from_stored_chunks(monkeypatch
     assert pipeline.retriever.sparse_weight == 0.4
     assert pipeline.retriever.dense_weight == 0.6
     assert pipeline.retriever.candidate_multiplier == 3
+    assert pipeline.candidate_k == 10
+    assert pipeline.final_top_k == 5
+    assert isinstance(pipeline.reranker, FakeReranker)
+    assert reranker_calls == [
+        (
+            "./models/test-reranker",
+            {
+                "batch_size": 16,
+                "max_length": 256,
+                "device": "cpu",
+                "failure_mode": "fallback",
+                "local_files_only": True,
+            },
+        )
+    ]
+
+
+def test_pipeline_source_does_not_hardcode_tinybert_model():
+    from pathlib import Path
+
+    assert "ms-marco-TinyBERT" not in Path("app/pipeline.py").read_text()

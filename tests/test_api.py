@@ -94,7 +94,7 @@ def test_ask_returns_answer_sources_and_latency():
     ]
     assert isinstance(body["latency_ms"], float)
     assert body["latency_ms"] >= 0
-    assert fake_pipeline.calls == [{"question": "RAG是什么？", "top_k": 4}]
+    assert fake_pipeline.calls == [{"question": "RAG是什么？", "top_k": 5}]
 
 
 def test_ask_passes_requested_top_k_to_pipeline():

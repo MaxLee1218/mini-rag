@@ -47,6 +47,19 @@ class PromptBuilderObject:
         return "OBJECT PROMPT"
 
 
+class FakeReranker:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def rerank(self, question, candidates, top_k=None):
+        self.calls.append((question, candidates, top_k))
+        if self.error:
+            raise self.error
+        return self.result if self.result is not None else list(reversed(candidates))[:top_k]
+
+
 def test_ask_runs_retrieval_prompt_generation_and_returns_result():
     call_log = []
     contexts = [
@@ -133,7 +146,59 @@ def test_ask_passes_top_k_to_retriever():
 
     pipeline.ask("问题", top_k=2)
 
-    assert retriever.received_top_k == 2
+    assert retriever.received_top_k == 10
+
+
+def test_pipeline_reranks_candidates_before_prompt_and_limits_results():
+    contexts = [
+        {"id": str(index), "text": f"text {index}", "metadata": {"source": f"{index}.md"}}
+        for index in range(12)
+    ]
+    retriever = FakeRetriever(contexts)
+    reranked = list(reversed(contexts[:10]))[:3]
+    reranker = FakeReranker(result=reranked)
+    prompt_builder = PromptBuilderObject()
+    pipeline = RAGPipeline(
+        retriever=retriever,
+        generator=FakeGenerator("answer"),
+        prompt_builder=prompt_builder,
+        reranker=reranker,
+        candidate_k=10,
+        final_top_k=3,
+    )
+
+    result = pipeline.ask("question", top_k=None)
+
+    assert retriever.received_top_k == 10
+    assert reranker.calls == [("question", contexts[:10], 3)]
+    assert prompt_builder.received_contexts == reranked
+    assert result.contexts == reranked
+
+
+def test_pipeline_without_reranker_keeps_fused_order_and_final_limit():
+    contexts = [{"id": str(index), "text": str(index)} for index in range(8)]
+    pipeline = RAGPipeline(
+        retriever=FakeRetriever(contexts),
+        generator=FakeGenerator(NOT_FOUND),
+        candidate_k=6,
+        final_top_k=2,
+    )
+    result = pipeline.ask("q", top_k=None)
+    assert [item["id"] for item in result.contexts] == ["0", "1"]
+
+
+def test_pipeline_reranker_runtime_failure_falls_back_and_generates():
+    contexts = [{"id": str(index), "text": str(index)} for index in range(4)]
+    pipeline = RAGPipeline(
+        retriever=FakeRetriever(contexts),
+        generator=FakeGenerator("answer"),
+        reranker=FakeReranker(error=RuntimeError("boom")),
+        candidate_k=4,
+        final_top_k=2,
+    )
+    result = pipeline.ask("q", top_k=None)
+    assert [item["id"] for item in result.contexts] == ["0", "1"]
+    assert result.answer.startswith("answer")
 
 
 @pytest.mark.parametrize("question", ["", "   ", None])

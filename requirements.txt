@@ -5,6 +5,7 @@ langchain-openai
 
 # Embedding
 sentence-transformers
+torch
 
 # Vector database
 chromadb

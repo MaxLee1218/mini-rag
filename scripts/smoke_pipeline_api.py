@@ -11,17 +11,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.config import VECTOR_COLLECTION_NAME, VECTOR_DB_PATH
-from app.embeddings import Embedder
-from app.generator import DeepSeekGenerator, load_deepseek_config_from_env
+from app.config import DEFAULT_TOP_K
 from app.pipeline import RAGPipeline, RAGResult
+from app.pipeline_factory import build_default_pipeline
 from app.prompt_builder import extract_context_text
-from app.retriever import Retriever
-from app.vector_store import ChromaVectorStore
 
 
 DEFAULT_QUESTION = "我今年几岁？"
-DEFAULT_TOP_K = 4
 CONTEXT_PREVIEW_CHARS = 500
 PROMPT_PREVIEW_CHARS = 3000
 SOURCE_DISPLAY_FIELDS = ("source", "title", "path", "file_path", "filename")
@@ -39,7 +35,10 @@ def positive_int(value: str) -> int:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a real RAGPipeline smoke test against the local vector store and DeepSeek API."
+        description=(
+            "Run a real RAGPipeline smoke test against the local vector store "
+            "and DeepSeek API."
+        )
     )
     parser.add_argument(
         "question",
@@ -67,15 +66,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def build_pipeline() -> RAGPipeline:
-    config = load_deepseek_config_from_env()
-    embedder = Embedder()
-    vector_store = ChromaVectorStore(
-        collection_name=VECTOR_COLLECTION_NAME,
-        persist_path=VECTOR_DB_PATH,
-    )
-    retriever = Retriever(embedder=embedder, vector_store=vector_store)
-    generator = DeepSeekGenerator(config=config)
-    return RAGPipeline(retriever=retriever, generator=generator)
+    return build_default_pipeline()
 
 
 def print_result(result: RAGResult) -> None:
@@ -157,7 +148,9 @@ def print_debug_prompt(result: RAGResult) -> None:
 
 def close_pipeline_resources(pipeline: RAGPipeline) -> None:
     try:
-        vector_store = getattr(getattr(pipeline, "retriever", None), "vector_store", None)
+        retriever = getattr(pipeline, "retriever", None)
+        dense_retriever = getattr(retriever, "dense_retriever", retriever)
+        vector_store = getattr(dense_retriever, "vector_store", None)
         close = getattr(vector_store, "close", None)
         if callable(close):
             close()

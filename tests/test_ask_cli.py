@@ -48,7 +48,7 @@ def test_single_question_mode_calls_fake_pipeline_once_and_returns_zero(
     exit_code = ask_script.main(["RAG是什么？"])
 
     assert exit_code == 0
-    assert fake_pipeline.calls == [{"question": "RAG是什么？", "top_k": 4}]
+    assert fake_pipeline.calls == [{"question": "RAG是什么？", "top_k": 5}]
     assert "RAG 是检索增强生成。" in capsys.readouterr().out
 
 
@@ -95,7 +95,7 @@ def test_interactive_mode_asks_one_question_then_exits(monkeypatch, capsys):
     exit_code = ask_script.main([])
 
     assert exit_code == 0
-    assert fake_pipeline.calls == [{"question": "RAG是什么？", "top_k": 4}]
+    assert fake_pipeline.calls == [{"question": "RAG是什么？", "top_k": 5}]
     assert "RAG 是检索增强生成。" in capsys.readouterr().out
 
 

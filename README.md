@@ -35,6 +35,7 @@ mini-rag/
 │   ├── schemas.py              # API request and response models
 │   ├── prompt_builder.py       # Build prompts and handle sources
 │   ├── retriever.py            # Retrieve relevant contexts
+│   ├── reranker.py             # Optional Cross-Encoder second-stage reranking
 │   └── vector_store.py         # Chroma vector store wrapper
 │
 ├── data/
@@ -72,6 +73,8 @@ Embedder
 Chroma Vector Store
     ↓
 Retriever
+    ↓
+Cross-Encoder Reranker (optional)
     ↓
 Prompt Builder
     ↓
@@ -130,6 +133,60 @@ The `.env` file is ignored by Git.
 The project automatically loads it through `python-dotenv` when `app.config` is imported.
 
 Do not commit your real API key.
+
+## Reranking
+
+The first retrieval stage uses BM25 and vector retrieval to recall candidates quickly, then hybrid retrieval normalizes, fuses, and deduplicates them. The optional second stage uses `cross-encoder/ms-marco-TinyBERT-L2-v2` to jointly encode each query and candidate document, produce a raw relevance score, and reorder only those recalled candidates.
+
+The default flow is:
+
+```text
+Recall and fuse 10 candidates
+→ TinyBERT Cross-Encoder reranking
+→ Keep 5 documents for the prompt
+```
+
+Configure it in `.env`:
+
+```env
+RERANKER_ENABLED=true
+RERANKER_MODEL=cross-encoder/ms-marco-TinyBERT-L2-v2
+RERANKER_TOP_K=5
+RERANKER_CANDIDATE_K=10
+RERANKER_BATCH_SIZE=16
+RERANKER_MAX_LENGTH=256
+RERANKER_DEVICE=cpu
+RERANKER_FAILURE_MODE=fallback
+RERANKER_LOCAL_FILES_ONLY=false
+```
+
+If `RERANKER_MODEL` is a Hugging Face model name, the first real reranking call may download the TinyBERT model. Later runs reuse the Hugging Face cache. To use a model downloaded into this project instead:
+
+```env
+RERANKER_MODEL=./models/ms-marco-TinyBERT-L2-v2
+RERANKER_LOCAL_FILES_ONLY=true
+```
+
+The model is loaded lazily and reused by the pipeline. If loading or inference fails, the pipeline logs the failure, keeps the original fused order, applies the final Top-K limit, and continues generation. Set `RERANKER_ENABLED=false` to retain a no-reranker baseline. Any `sentence-transformers.CrossEncoder`-compatible model can be selected through `RERANKER_MODEL` without changing Pipeline code.
+
+TinyBERT is a lightweight Cross-Encoder suitable for CPU environments, but Cross-Encoder inference still adds query latency. Reduce `RERANKER_CANDIDATE_K`, `RERANKER_MAX_LENGTH`, or `RERANKER_BATCH_SIZE` when lower latency is more important.
+
+`cross-encoder/ms-marco-TinyBERT-L2-v2` is primarily trained on English MS MARCO data. It is appropriate for lightweight engineering verification and English retrieval scenarios. Projects dominated by Chinese documents should validate it with an independent evaluation set and retain the ability to switch to a Chinese or multilingual reranker. This project does not claim an unmeasured Chinese retrieval improvement.
+
+Unit tests use fake models and do not download TinyBERT:
+
+```bash
+python -m pytest tests/test_reranker.py -q
+python -m pytest -q
+```
+
+An opt-in real-model check uses English retrieval examples:
+
+```bash
+python -m scripts.smoke_reranker
+```
+
+Future model comparisons can disable reranking for a baseline and retain both the original retrieval scores and successful `rerank_score` values. A production evaluation should compare no reranker, TinyBERT, and relevant Chinese or multilingual models using Hit Rate@K, Recall@K, MRR@K, NDCG@K, mean rerank latency, and P95 rerank latency. No evaluation numbers are fabricated here.
 
 ## Prepare Documents
 
@@ -275,7 +332,7 @@ curl -X POST "http://127.0.0.1:8000/ask" \
   -d '{"question": "你的问题"}'
 ```
 
-The API default `top_k` is `4`, matching the CLI default. You can override it per request:
+The API default `top_k` is `5`, matching the CLI and reranker default. You can override it per request:
 
 ```json
 {
