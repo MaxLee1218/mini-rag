@@ -14,10 +14,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.chunker import split_document
-from app.config import VECTOR_COLLECTION_NAME, VECTOR_DB_PATH
+from app.chunker import split_document, split_document_parent_child
+from app.config import (
+    CHILD_CHUNK_OVERLAP,
+    CHILD_CHUNK_SIZE,
+    CHUNK_MODE,
+    PARENT_CHUNK_OVERLAP,
+    PARENT_CHUNK_SIZE,
+    PARENT_STORE_PATH,
+    VECTOR_COLLECTION_NAME,
+    VECTOR_DB_PATH,
+)
 from app.document_loader import load_document_file
 from app.embeddings import Embedder
+from app.parent_store import SQLiteParentStore
 from app.vector_store import ChromaVectorStore
 
 
@@ -40,6 +50,25 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--persist-path",
         default=VECTOR_DB_PATH,
         help="Chroma persistent database path.",
+    )
+    parser.add_argument(
+        "--chunk-mode",
+        choices=("standard", "parent-child"),
+        default=CHUNK_MODE,
+        help="Chunking and storage mode.",
+    )
+    parser.add_argument("--parent-chunk-size", type=int, default=PARENT_CHUNK_SIZE)
+    parser.add_argument(
+        "--parent-chunk-overlap", type=int, default=PARENT_CHUNK_OVERLAP
+    )
+    parser.add_argument("--child-chunk-size", type=int, default=CHILD_CHUNK_SIZE)
+    parser.add_argument(
+        "--child-chunk-overlap", type=int, default=CHILD_CHUNK_OVERLAP
+    )
+    parser.add_argument(
+        "--parent-store-path",
+        default=PARENT_STORE_PATH,
+        help="SQLite database used for parent chunks in parent-child mode.",
     )
     parser.add_argument(
         "--reset",
@@ -126,24 +155,51 @@ def ingest(
     extensions: str | Iterable[str] = DEFAULT_EXTENSIONS,
     dry_run: bool = False,
     verbose: bool = False,
+    chunk_mode: str = CHUNK_MODE,
+    parent_chunk_size: int = PARENT_CHUNK_SIZE,
+    parent_chunk_overlap: int = PARENT_CHUNK_OVERLAP,
+    child_chunk_size: int = CHILD_CHUNK_SIZE,
+    child_chunk_overlap: int = CHILD_CHUNK_OVERLAP,
+    parent_store_path: str | Path = PARENT_STORE_PATH,
     embedder: Any | None = None,
     vector_store: Any | None = None,
+    parent_store: Any | None = None,
     loader_func: Any | None = None,
     chunker_func: Any | None = None,
 ) -> dict[str, Any]:
+    if chunk_mode not in {"standard", "parent-child"}:
+        raise ValueError("chunk_mode must be one of: standard, parent-child")
     input_root = Path(input_path)
     normalized_extensions = normalize_extensions(extensions)
     input_files = iter_input_files(input_root, normalized_extensions)
     base_path = input_root if input_root.is_dir() else input_root.parent
     loader = loader_func if loader_func is not None else load_document_file
-    chunker = chunker_func if chunker_func is not None else split_document
+    standard_chunker = chunker_func if chunker_func is not None else split_document
 
     prepared_chunks: list[dict[str, Any]] = []
+    prepared_parents: list[dict[str, Any]] = []
     file_details = []
+    documents_loaded = 0
+    skipped_empty_documents = 0
 
     for file_path in input_files:
-        document = loader(file_path, base_path=base_path)
-        document_text = _document_text(document)
+        try:
+            document = loader(file_path, base_path=base_path)
+            document_text = _document_text(document)
+        except ValueError as error:
+            if chunk_mode != "parent-child" or not _is_empty_document_error(error):
+                raise
+            skipped_empty_documents += 1
+            file_details.append(
+                {
+                    "path": str(file_path),
+                    "chunks": 0,
+                    "parents": 0,
+                    "skipped": "empty",
+                }
+            )
+            continue
+        documents_loaded += 1
         loader_metadata = _document_metadata(document)
         relative_path = _relative_path(file_path, base_path)
         chunker_document = {
@@ -151,18 +207,47 @@ def ingest(
             "source": relative_path,
             "metadata": loader_metadata,
         }
-        raw_chunks = list(chunker(chunker_document))
-        if not raw_chunks:
-            raise ValueError(f"chunker produced no chunks for: {file_path}")
-
-        file_chunks = _prepare_chunks_for_embedding(
-            raw_chunks=raw_chunks,
-            file_path=file_path,
-            relative_path=relative_path,
-            loader_metadata=loader_metadata,
-        )
+        if chunk_mode == "parent-child":
+            split = split_document_parent_child(
+                chunker_document,
+                parent_chunk_size=parent_chunk_size,
+                child_chunk_size=child_chunk_size,
+                parent_chunk_overlap=parent_chunk_overlap,
+                child_chunk_overlap=child_chunk_overlap,
+            )
+            if not split.parents or not split.children:
+                raise ValueError(
+                    f"parent-child chunker produced no chunks for: {file_path}"
+                )
+            file_parents = _prepare_parent_records(
+                split.parents,
+                file_path=file_path,
+                relative_path=relative_path,
+            )
+            file_chunks = _prepare_child_records(
+                split.children,
+                file_path=file_path,
+                relative_path=relative_path,
+            )
+            prepared_parents.extend(file_parents)
+        else:
+            raw_chunks = list(standard_chunker(chunker_document))
+            if not raw_chunks:
+                raise ValueError(f"chunker produced no chunks for: {file_path}")
+            file_chunks = _prepare_chunks_for_embedding(
+                raw_chunks=raw_chunks,
+                file_path=file_path,
+                relative_path=relative_path,
+                loader_metadata=loader_metadata,
+            )
         prepared_chunks.extend(file_chunks)
-        file_details.append({"path": str(file_path), "chunks": len(file_chunks)})
+        file_details.append(
+            {
+                "path": str(file_path),
+                "chunks": len(file_chunks),
+                "parents": len(file_parents) if chunk_mode == "parent-child" else 0,
+            }
+        )
 
     summary = {
         "input_path": str(input_root),
@@ -170,9 +255,21 @@ def ingest(
         "persist_path": persist_path,
         "reset": bool(reset),
         "dry_run": bool(dry_run),
+        "chunk_mode": chunk_mode,
+        "parent_store_path": str(parent_store_path),
         "files_indexed": len(input_files),
+        "documents_loaded": documents_loaded,
         "chunks_created": len(prepared_chunks),
         "chunks_stored": 0,
+        "parent_chunks": len(prepared_parents),
+        "child_chunks": len(prepared_chunks) if chunk_mode == "parent-child" else 0,
+        "average_children_per_parent": (
+            len(prepared_chunks) / len(prepared_parents) if prepared_parents else 0.0
+        ),
+        "embedded_child_chunks": 0,
+        "stored_parent_chunks": 0,
+        "stored_child_chunks": 0,
+        "skipped_empty_documents": skipped_empty_documents,
         "file_details": file_details,
     }
 
@@ -186,22 +283,41 @@ def ingest(
         else ChromaVectorStore(collection_name=collection, persist_path=persist_path)
     )
     created_store = vector_store is None
+    active_parent_store = parent_store
+    created_parent_store = False
+    if chunk_mode == "parent-child" and active_parent_store is None:
+        active_parent_store = SQLiteParentStore(parent_store_path)
+        created_parent_store = True
 
     try:
         if reset:
             active_store.reset()
+            if active_parent_store is not None:
+                active_parent_store.reset()
+        if not prepared_chunks:
+            return summary
+        if chunk_mode == "parent-child":
+            _validate_child_parent_ids(prepared_chunks)
         embedded_chunks = active_embedder.embed_chunks(prepared_chunks)
+        if chunk_mode == "parent-child":
+            active_parent_store.upsert(prepared_parents)
+            summary["stored_parent_chunks"] = int(active_parent_store.count())
+            summary["embedded_child_chunks"] = len(embedded_chunks)
         active_store.add_chunks(embedded_chunks)
         summary["chunks_stored"] = _stored_chunk_count(
             active_store,
             default_count=len(embedded_chunks),
         )
+        if chunk_mode == "parent-child":
+            summary["stored_child_chunks"] = len(embedded_chunks)
         return summary
     finally:
         if created_store:
             close_store = getattr(active_store, "close", None)
             if callable(close_store):
                 close_store()
+        if created_parent_store:
+            active_parent_store.close()
 
 
 def print_summary(summary: Mapping[str, Any], verbose: bool = False) -> None:
@@ -210,14 +326,25 @@ def print_summary(summary: Mapping[str, Any], verbose: bool = False) -> None:
     print(f"Persist path: {summary['persist_path']}")
     print(f"Reset collection: {_yes_no(bool(summary['reset']))}")
     print(f"Dry run: {_yes_no(bool(summary['dry_run']))}")
+    print(f"Chunk mode: {summary.get('chunk_mode', 'standard')}")
 
     if verbose:
         for file_detail in summary.get("file_details", []):
             print(f"Indexed: {file_detail['path']} | chunks: {file_detail['chunks']}")
 
     print(f"Files indexed: {summary['files_indexed']}")
-    print(f"Chunks created: {summary['chunks_created']}")
-    print(f"Chunks stored: {summary['chunks_stored']}")
+    if summary.get("chunk_mode") == "parent-child":
+        print(f"Loaded documents: {summary['documents_loaded']}")
+        print(f"Parent chunks: {summary['parent_chunks']}")
+        print(f"Child chunks: {summary['child_chunks']}")
+        print(f"Average children per parent: {summary['average_children_per_parent']:.2f}")
+        print(f"Embedded child chunks: {summary['embedded_child_chunks']}")
+        print(f"Stored parent chunks: {summary['stored_parent_chunks']}")
+        print(f"Stored child chunks: {summary['stored_child_chunks']}")
+        print(f"Skipped empty documents: {summary['skipped_empty_documents']}")
+    else:
+        print(f"Chunks created: {summary['chunks_created']}")
+        print(f"Chunks stored: {summary['chunks_stored']}")
 
     if summary["dry_run"]:
         print("No embeddings generated.")
@@ -235,6 +362,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             extensions=args.extensions,
             dry_run=args.dry_run,
             verbose=args.verbose,
+            chunk_mode=args.chunk_mode,
+            parent_chunk_size=args.parent_chunk_size,
+            parent_chunk_overlap=args.parent_chunk_overlap,
+            child_chunk_size=args.child_chunk_size,
+            child_chunk_overlap=args.child_chunk_overlap,
+            parent_store_path=args.parent_store_path,
         )
     except (FileNotFoundError, ValueError, RuntimeError) as error:
         print(f"Error: {error}", file=sys.stderr)
@@ -290,6 +423,11 @@ def _document_metadata(document: Mapping[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _is_empty_document_error(error: ValueError) -> bool:
+    message = str(error).lower()
+    return "document is empty" in message or "loaded document is empty" in message
+
+
 def _prepare_chunks_for_embedding(
     raw_chunks: Sequence[Any],
     file_path: Path,
@@ -305,6 +443,7 @@ def _prepare_chunks_for_embedding(
             "filename": file_path.name,
             "relative_path": relative_path,
             "chunk_index": chunk_index,
+            "chunk_type": "standard",
         }
         metadata = {}
         metadata.update(loader_metadata)
@@ -323,6 +462,84 @@ def _prepare_chunks_for_embedding(
         )
 
     return prepared_chunks
+
+
+def _prepare_parent_records(
+    parents: Sequence[Mapping[str, Any]],
+    *,
+    file_path: Path,
+    relative_path: str,
+) -> list[dict[str, Any]]:
+    return [
+        _prepare_parent_child_record(
+            parent,
+            file_path=file_path,
+            relative_path=relative_path,
+            expected_type="parent",
+        )
+        for parent in parents
+    ]
+
+
+def _prepare_child_records(
+    children: Sequence[Mapping[str, Any]],
+    *,
+    file_path: Path,
+    relative_path: str,
+) -> list[dict[str, Any]]:
+    return [
+        _prepare_parent_child_record(
+            child,
+            file_path=file_path,
+            relative_path=relative_path,
+            expected_type="child",
+        )
+        for child in children
+    ]
+
+
+def _prepare_parent_child_record(
+    record: Mapping[str, Any],
+    *,
+    file_path: Path,
+    relative_path: str,
+    expected_type: str,
+) -> dict[str, Any]:
+    record_id = record.get("id")
+    text = record.get("text")
+    metadata = record.get("metadata")
+    if not isinstance(record_id, str) or not record_id.strip():
+        raise ValueError(f"{expected_type} chunk id must not be blank")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError(f"{expected_type} chunk text must not be blank")
+    if not isinstance(metadata, Mapping):
+        raise ValueError(f"{expected_type} chunk metadata must be a dictionary")
+    merged_metadata = dict(metadata)
+    merged_metadata.update(
+        {
+            "source": relative_path,
+            "filename": file_path.name,
+            "relative_path": relative_path,
+            "chunk_type": expected_type,
+        }
+    )
+    return {
+        "id": record_id,
+        "text": text,
+        "metadata": _sanitize_metadata(merged_metadata),
+    }
+
+
+def _validate_child_parent_ids(children: Sequence[Mapping[str, Any]]) -> None:
+    for child in children:
+        metadata = child.get("metadata")
+        parent_id = (
+            metadata.get("parent_id") if isinstance(metadata, Mapping) else None
+        )
+        if not isinstance(parent_id, str) or not parent_id.strip():
+            raise ValueError(
+                f"child chunk is missing parent_id: {child.get('id', 'unknown')}"
+            )
 
 
 def _chunk_text_and_metadata(raw_chunk: Any) -> tuple[str, dict[str, Any]]:

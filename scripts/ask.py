@@ -214,11 +214,12 @@ def main(argv: list[str] | None = None) -> int:
 
 def close_pipeline_resources(pipeline: Any) -> None:
     try:
-        vector_store = getattr(
-            getattr(pipeline, "retriever", None),
-            "vector_store",
-            None,
-        )
+        retriever = getattr(pipeline, "retriever", None)
+        close_retriever = getattr(retriever, "close", None)
+        if callable(close_retriever):
+            close_retriever()
+            return
+        vector_store = getattr(retriever, "vector_store", None)
         close = getattr(vector_store, "close", None)
         if callable(close):
             close()

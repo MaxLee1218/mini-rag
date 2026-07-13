@@ -61,6 +61,23 @@ class ExplodingFactory:
         raise AssertionError("real component should not be instantiated")
 
 
+def test_parse_args_accepts_parent_child_debug_options():
+    args = query_script.parse_args(
+        [
+            "--query",
+            "question",
+            "--chunk-mode",
+            "parent-child",
+            "--show-child",
+            "--show-parent-id",
+        ]
+    )
+
+    assert args.chunk_mode == "parent-child"
+    assert args.show_child is True
+    assert args.show_parent_id is True
+
+
 def test_parse_where_filter_returns_none_for_none():
     assert query_script.parse_where_filter(None) is None
 

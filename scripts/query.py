@@ -13,8 +13,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.config import VECTOR_COLLECTION_NAME, VECTOR_DB_PATH
+from app.config import (
+    CHUNK_MODE,
+    PARENT_STORE_PATH,
+    VECTOR_COLLECTION_NAME,
+    VECTOR_DB_PATH,
+)
 from app.embeddings import Embedder
+from app.parent_store import SQLiteParentStore
 from app.retriever import Retriever
 from app.vector_store import ChromaVectorStore
 
@@ -46,6 +52,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Number of chunks to retrieve.",
     )
     parser.add_argument(
+        "--chunk-mode",
+        choices=("standard", "parent-child"),
+        default=CHUNK_MODE,
+        help="Retrieval mode. In parent-child mode top-k counts child hits.",
+    )
+    parser.add_argument(
+        "--parent-store-path",
+        default=PARENT_STORE_PATH,
+        help="SQLite parent store used in parent-child mode.",
+    )
+    parser.add_argument(
         "--where",
         help='Metadata filter JSON, for example: \'{ "filename": "rag_notes.txt" }\'',
     )
@@ -53,6 +70,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--show-context",
         action="store_true",
         help="Also print Retriever.build_context(results).",
+    )
+    parser.add_argument(
+        "--show-child",
+        action="store_true",
+        help="Show the highest-ranked matched child for each restored parent.",
+    )
+    parser.add_argument(
+        "--show-parent-id",
+        action="store_true",
+        help="Show internal parent IDs for diagnostics.",
     )
     parser.add_argument(
         "--max-chars",
@@ -105,6 +132,9 @@ def format_result(
     result: Mapping[str, Any],
     index: int,
     max_chars: int = DEFAULT_MAX_CHARS,
+    *,
+    show_child: bool = False,
+    show_parent_id: bool = False,
 ) -> str:
     source_info = extract_source_info(result)
     chunk_id = _clean_display_value(result.get("id"))
@@ -112,8 +142,7 @@ def format_result(
     text = _result_text(result)
     displayed_text = truncate_text(text, max_chars)
 
-    return "\n".join(
-        [
+    lines = [
             f"[{index}] Source: {source_info['source']}",
             f"Filename: {source_info['filename']}",
             f"Relative path: {source_info['relative_path']}",
@@ -122,7 +151,22 @@ def format_result(
             "Text:",
             displayed_text,
         ]
-    )
+    if show_parent_id:
+        lines.insert(4, f"Parent ID: {chunk_id}")
+    if show_child:
+        retrieval = result.get("retrieval")
+        if isinstance(retrieval, Mapping):
+            lines.extend(
+                [
+                    f"Matched child ID: {_clean_display_value(retrieval.get('matched_child_id'))}",
+                    f"Child score: {_format_distance(retrieval.get('child_score'))}",
+                    "Matched child text:",
+                    truncate_text(
+                        str(retrieval.get("matched_child_text") or ""), max_chars
+                    ),
+                ]
+            )
+    return "\n".join(lines)
 
 
 def format_sources(results: Sequence[Mapping[str, Any]]) -> str:
@@ -161,6 +205,10 @@ def run_query(
     show_context: bool = False,
     max_chars: Any = DEFAULT_MAX_CHARS,
     include_sources_summary: bool = True,
+    chunk_mode: str = CHUNK_MODE,
+    parent_store_path: str | Path = PARENT_STORE_PATH,
+    show_child: bool = False,
+    show_parent_id: bool = False,
     retriever: Any | None = None,
 ) -> str:
     clean_query = _validate_nonblank_string(query, "query")
@@ -168,22 +216,37 @@ def run_query(
     clean_persist_path = _validate_nonblank_string(persist_path, "persist_path")
     resolved_top_k = _validate_positive_int(top_k, "top_k")
     resolved_max_chars = _validate_positive_int(max_chars, "max_chars")
+    if chunk_mode not in {"standard", "parent-child"}:
+        raise ValueError("chunk_mode must be one of: standard, parent-child")
 
     active_retriever = retriever
     created_store = None
-    if active_retriever is None:
-        embedder = Embedder()
-        created_store = ChromaVectorStore(
-            collection_name=clean_collection,
-            persist_path=clean_persist_path,
-        )
-        active_retriever = Retriever(
-            embedder=embedder,
-            vector_store=created_store,
-            default_top_k=resolved_top_k,
-        )
-
+    created_parent_store = None
     try:
+        if active_retriever is None:
+            if chunk_mode == "parent-child":
+                resolved_parent_store_path = _resolved_project_path(parent_store_path)
+                if not resolved_parent_store_path.is_file():
+                    raise ValueError(
+                        "parent store is missing; run parent-child ingest first: "
+                        f"{resolved_parent_store_path}"
+                    )
+                created_parent_store = SQLiteParentStore(
+                    resolved_parent_store_path
+                )
+            embedder = Embedder()
+            created_store = ChromaVectorStore(
+                collection_name=clean_collection,
+                persist_path=clean_persist_path,
+            )
+            active_retriever = Retriever(
+                embedder=embedder,
+                vector_store=created_store,
+                default_top_k=resolved_top_k,
+                mode=chunk_mode,
+                parent_store=created_parent_store,
+            )
+
         results = active_retriever.retrieve(
             clean_query,
             top_k=resolved_top_k,
@@ -213,6 +276,8 @@ def run_query(
                         result,
                         index=index,
                         max_chars=resolved_max_chars,
+                        show_child=show_child,
+                        show_parent_id=show_parent_id,
                     ),
                 ]
             )
@@ -229,6 +294,8 @@ def run_query(
             close_store = getattr(created_store, "close", None)
             if callable(close_store):
                 close_store()
+        if created_parent_store is not None:
+            created_parent_store.close()
 
 
 def main(argv: Sequence[str] | None = None, retriever: Any | None = None) -> int:
@@ -244,9 +311,13 @@ def main(argv: Sequence[str] | None = None, retriever: Any | None = None) -> int
             show_context=args.show_context,
             max_chars=args.max_chars,
             include_sources_summary=not args.no_sources_summary,
+            chunk_mode=args.chunk_mode,
+            parent_store_path=args.parent_store_path,
+            show_child=args.show_child,
+            show_parent_id=args.show_parent_id,
             retriever=retriever,
         )
-    except ValueError as error:
+    except (ValueError, RuntimeError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
@@ -359,6 +430,13 @@ def _strip_loose_json_token(value: str) -> str:
     ):
         return stripped[1:-1]
     return stripped
+
+
+def _resolved_project_path(path: str | Path) -> Path:
+    resolved = Path(path)
+    if resolved.is_absolute():
+        return resolved
+    return PROJECT_ROOT / resolved
 
 
 if __name__ == "__main__":

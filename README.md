@@ -8,6 +8,7 @@ This project implements a complete basic Retrieval-Augmented Generation pipeline
 
 - Load raw documents from `data/raw/`
 - Split documents into chunks with metadata preservation
+- Optional parent-child chunking with persistent parent lookup
 - Generate embeddings with a multilingual SentenceTransformer model
 - Store vectors in ChromaDB
 - Retrieve relevant contexts by semantic similarity
@@ -32,6 +33,7 @@ mini-rag/
 │   ├── generator.py            # DeepSeek LLM generator
 │   ├── pipeline.py             # Main RAG orchestration layer
 │   ├── pipeline_factory.py     # Build the default RAG pipeline
+│   ├── parent_store.py         # Persistent SQLite parent chunk lookup
 │   ├── schemas.py              # API request and response models
 │   ├── prompt_builder.py       # Build prompts and handle sources
 │   ├── retriever.py            # Retrieve relevant contexts
@@ -40,7 +42,8 @@ mini-rag/
 │
 ├── data/
 │   ├── raw/                    # Raw documents
-│   └── chroma/                 # Local Chroma vector database
+│   ├── chroma/                 # Local Chroma vector database
+│   └── parents/                # Parent chunk SQLite database
 │
 ├── models/                     # Optional local embedding models
 │
@@ -262,6 +265,155 @@ python -m scripts.smoke_reranker
 ```
 
 Future model comparisons can disable reranking for a baseline and retain both the original retrieval scores and successful `rerank_score` values. A production evaluation should compare no reranker, TinyBERT, and relevant Chinese or multilingual models using Hit Rate@K, Recall@K, MRR@K, NDCG@K, mean rerank latency, and P95 rerank latency. No evaluation numbers are fabricated here.
+
+## Parent-Child Chunking
+
+Traditional chunking has a useful but awkward trade-off. Small chunks usually
+match focused queries more precisely, but they may omit the surrounding facts
+the generator needs. Large chunks preserve context, but their embeddings can
+mix several topics and reduce retrieval precision. Parent-child mode separates
+those responsibilities:
+
+```text
+small child -> retrieval
+large parent -> prompt and generation
+```
+
+The complete flow is:
+
+```text
+Document
+  ↓
+Parent chunks
+  ↓
+Child chunks
+  ↓
+Child embeddings in Chroma
+  ↓
+Vector search (chunk_type == child)
+  ↓
+child metadata.parent_id
+  ↓
+Parent lookup in SQLite
+  ↓
+Parent context
+  ↓
+Prompt Builder -> LLM
+```
+
+### Modes and configuration
+
+`standard` is the default and preserves the existing workflow. It embeds and
+retrieves ordinary chunks; legacy vectors without `chunk_type` remain
+queryable. `parent-child` stores only child embeddings in Chroma and resolves
+their parents before returning contexts to the Pipeline. Parent chunks never
+participate in vector search.
+
+Configure the default mode in `.env`:
+
+```env
+RAG_CHUNK_MODE=standard
+RAG_PARENT_CHUNK_SIZE=1000
+RAG_PARENT_CHUNK_OVERLAP=100
+RAG_CHILD_CHUNK_SIZE=250
+RAG_CHILD_CHUNK_OVERLAP=50
+RAG_PARENT_STORE_PATH=data/parents/parents.sqlite3
+```
+
+The parent size controls the maximum context unit sent to the LLM. The child
+size controls the searchable unit. Each overlap retains boundary context
+between adjacent chunks of that level. Child size must not exceed parent size,
+and each overlap must be non-negative and smaller than its chunk size.
+
+### Ingest
+
+Standard mode:
+
+```bash
+python scripts/ingest.py \
+  --chunk-mode standard
+```
+
+Parent-child mode:
+
+```bash
+python scripts/ingest.py \
+  --chunk-mode parent-child \
+  --parent-chunk-size 1000 \
+  --parent-chunk-overlap 100 \
+  --child-chunk-size 250 \
+  --child-chunk-overlap 50
+```
+
+Preview either operation without embeddings or writes:
+
+```bash
+python scripts/ingest.py --chunk-mode standard --dry-run
+
+python scripts/ingest.py \
+  --chunk-mode parent-child \
+  --parent-chunk-size 1000 \
+  --parent-chunk-overlap 100 \
+  --child-chunk-size 250 \
+  --child-chunk-overlap 50 \
+  --dry-run
+```
+
+`--reset` clears the Chroma collection before ingestion. In parent-child mode
+it also clears the SQLite parent store before writing the new parents and
+children. `--dry-run` touches neither store and reports document, parent,
+child, average-child, and skipped-empty counts.
+
+### Query and debugging
+
+Standard retrieval:
+
+```bash
+python scripts/query.py \
+  --query "什么是 RAG？" \
+  --chunk-mode standard
+```
+
+Parent-child retrieval with diagnostics:
+
+```bash
+python scripts/query.py \
+  --query "父子块切分有什么作用？" \
+  --chunk-mode parent-child \
+  --top-k 5 \
+  --show-context \
+  --show-child \
+  --show-parent-id
+```
+
+`--show-child` prints the highest-ranked matched child ID, text, and score for
+each restored parent. The normal displayed text and `--show-context` output are
+the parent text. `scripts/ask.py`, FastAPI, and the smoke pipeline use
+`RAG_CHUNK_MODE` through `pipeline_factory.py`, so they do not duplicate parent
+lookup logic.
+
+In parent-child mode, `top_k` is the number of child vector hits requested.
+Several children may map to the same parent; parents are deduplicated in first
+child-hit order, so the final number of parent contexts can be smaller than
+`top_k`.
+
+### Storage and identity
+
+- Child text, embeddings, and flat child metadata are stored in the configured
+  Chroma collection.
+- Parent text and metadata are stored in
+  `data/parents/parents.sqlite3` by default.
+- `parent_id` links each child to exactly one parent. IDs combine a SHA-256
+  source-derived document ID, stable indexes, and a bounded text hash. Repeating
+  ingestion of unchanged content therefore upserts the same IDs.
+- Sources always come from the original `metadata.source`; internal parent IDs,
+  child IDs, and the SQLite path are never used as citations.
+
+Changing chunk sizes, overlaps, source paths, or content changes persisted IDs
+and can make an existing pair of stores inconsistent. Run parent-child ingest
+with `--reset` after such changes. Do not delete or replace only Chroma or only
+the parent SQLite database: a child whose parent is missing causes an explicit
+`ParentChunkNotFoundError` instead of silently falling back to child text.
 
 ## Prepare Documents
 
@@ -608,6 +760,9 @@ loading → chunking → embedding → vector storage → retrieval → promptin
 
 `POST /ask` appends one JSON object per request to `logs/rag_requests.jsonl`.
 The file is ignored by Git because it may contain user questions and model answers.
+
+Each entry includes `chunk_mode`, whose value is `standard` or `parent-child`
+for the retrieval mode actually used by that request.
 
 A synthetic success and error example is available at
 `docs/example_rag_request_logs.jsonl`.

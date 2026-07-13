@@ -219,6 +219,7 @@ __marimo__/
 
 # Chroma vector database
 data/chroma/
+data/parents/
 .chroma/
 
 # Private local documents

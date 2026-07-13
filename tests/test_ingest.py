@@ -42,6 +42,23 @@ class FakeVectorStore:
         return len(self.added_chunks)
 
 
+class FakeParentStore:
+    def __init__(self):
+        self.parents = {}
+        self.reset_called = False
+
+    def upsert(self, parents):
+        for parent in parents:
+            self.parents[parent["id"]] = parent
+
+    def count(self):
+        return len(self.parents)
+
+    def reset(self):
+        self.reset_called = True
+        self.parents.clear()
+
+
 class ExplodingComponent:
     def __getattr__(self, name):
         raise AssertionError(f"dry run should not access {name}")
@@ -135,6 +152,115 @@ def test_single_file_ingestion_returns_summary_and_stores_embedded_chunks(tmp_pa
     assert prepared_chunk["metadata"]["filename"] == "RAG Notes.txt"
     assert prepared_chunk["metadata"]["relative_path"] == "RAG Notes.txt"
     assert prepared_chunk["metadata"]["chunk_index"] == 0
+    assert prepared_chunk["metadata"]["chunk_type"] == "standard"
+
+
+def test_parent_child_ingest_stores_only_children_in_vector_store_and_parents_separately(tmp_path):
+    raw_file = tmp_path / "example.txt"
+    raw_file.write_text("alpha beta gamma delta epsilon zeta eta theta", encoding="utf-8")
+    embedder = FakeEmbedder()
+    vector_store = FakeVectorStore()
+    parent_store = FakeParentStore()
+
+    summary = ingest_script.ingest(
+        input_path=raw_file,
+        chunk_mode="parent-child",
+        parent_chunk_size=24,
+        parent_chunk_overlap=4,
+        child_chunk_size=10,
+        child_chunk_overlap=2,
+        embedder=embedder,
+        vector_store=vector_store,
+        parent_store=parent_store,
+    )
+
+    assert summary["parent_chunks"] > 0
+    assert summary["child_chunks"] > summary["parent_chunks"]
+    assert summary["embedded_child_chunks"] == summary["child_chunks"]
+    assert summary["stored_parent_chunks"] == len(parent_store.parents)
+    assert all(chunk["metadata"]["chunk_type"] == "child" for chunk in embedder.received_chunks)
+    assert all(chunk["metadata"]["parent_id"] in parent_store.parents for chunk in embedder.received_chunks)
+    assert all(parent["metadata"]["source"] == "example.txt" for parent in parent_store.parents.values())
+
+
+def test_parent_child_repeated_ingest_upserts_and_reset_clears_both_stores(tmp_path):
+    raw_file = tmp_path / "example.txt"
+    raw_file.write_text("one two three four five six seven", encoding="utf-8")
+    vector_store = FakeVectorStore()
+    parent_store = FakeParentStore()
+    kwargs = dict(
+        input_path=raw_file,
+        chunk_mode="parent-child",
+        parent_chunk_size=18,
+        parent_chunk_overlap=0,
+        child_chunk_size=8,
+        child_chunk_overlap=0,
+        embedder=FakeEmbedder(),
+        vector_store=vector_store,
+        parent_store=parent_store,
+    )
+
+    ingest_script.ingest(**kwargs)
+    first_parent_ids = set(parent_store.parents)
+    first_child_ids = {chunk["id"] for chunk in vector_store.added_chunks}
+    ingest_script.ingest(**kwargs)
+
+    assert set(parent_store.parents) == first_parent_ids
+    assert {chunk["id"] for chunk in vector_store.added_chunks} == first_child_ids
+
+    ingest_script.ingest(**kwargs, reset=True)
+    assert parent_store.reset_called is True
+    assert vector_store.reset_called is True
+
+
+def test_parent_child_dry_run_does_not_touch_stores_and_reports_stats(tmp_path):
+    raw_file = tmp_path / "example.txt"
+    raw_file.write_text("alpha beta gamma delta", encoding="utf-8")
+    summary = ingest_script.ingest(
+        input_path=raw_file,
+        chunk_mode="parent-child",
+        parent_chunk_size=16,
+        parent_chunk_overlap=0,
+        child_chunk_size=6,
+        child_chunk_overlap=0,
+        dry_run=True,
+        embedder=ExplodingComponent(),
+        vector_store=ExplodingComponent(),
+        parent_store=ExplodingComponent(),
+    )
+
+    assert summary["parent_chunks"] > 0
+    assert summary["child_chunks"] > 0
+    assert summary["average_children_per_parent"] > 0
+    assert summary["stored_parent_chunks"] == 0
+    assert summary["stored_child_chunks"] == 0
+
+
+def test_ingest_rejects_invalid_chunk_mode(tmp_path):
+    raw_file = tmp_path / "example.txt"
+    raw_file.write_text("content", encoding="utf-8")
+    with pytest.raises(ValueError, match="chunk_mode must be one of"):
+        ingest_script.ingest(input_path=raw_file, chunk_mode="invalid", dry_run=True)
+
+
+def test_parent_child_dry_run_counts_and_skips_empty_documents(tmp_path):
+    empty_file = tmp_path / "empty.txt"
+    empty_file.write_text("  \n\t", encoding="utf-8")
+
+    summary = ingest_script.ingest(
+        input_path=empty_file,
+        chunk_mode="parent-child",
+        parent_chunk_size=20,
+        parent_chunk_overlap=0,
+        child_chunk_size=5,
+        child_chunk_overlap=0,
+        dry_run=True,
+    )
+
+    assert summary["documents_loaded"] == 0
+    assert summary["skipped_empty_documents"] == 1
+    assert summary["parent_chunks"] == 0
+    assert summary["child_chunks"] == 0
 
 
 def test_directory_ingestion_uses_stable_distinct_project_relative_ids(tmp_path):

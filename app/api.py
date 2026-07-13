@@ -131,6 +131,7 @@ def ask(
         "query_was_rewritten": query_was_rewritten,
         "rewrite_reason": rewrite_reason,
         "history_turn_count": len(history),
+        "chunk_mode": _pipeline_chunk_mode(pipeline),
     }
 
     try:
@@ -257,6 +258,20 @@ def _get_value(item: Any, field_name: str) -> Any:
     if isinstance(item, Mapping):
         return item.get(field_name)
     return getattr(item, field_name, None)
+
+
+def _pipeline_chunk_mode(pipeline: Any) -> str:
+    """Return the effective retrieval mode without exposing retrieval internals."""
+    retriever = getattr(pipeline, "retriever", None)
+    mode = getattr(retriever, "mode", None)
+    if mode in {"standard", "parent-child"}:
+        return mode
+
+    child_retriever = getattr(retriever, "child_retriever", None)
+    child_mode = getattr(child_retriever, "mode", None)
+    if child_mode in {"standard", "parent-child"}:
+        return child_mode
+    return "standard"
 
 
 def _as_list(value: Any) -> list[Any]:

@@ -51,6 +51,19 @@ def _parse_positive_int_env(name: str, default: int) -> int:
     return parsed
 
 
+def _parse_nonnegative_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be a non-negative integer") from error
+    if parsed < 0:
+        raise RuntimeError(f"{name} must be a non-negative integer")
+    return parsed
+
+
 def _parse_bounded_int_env(
     name: str,
     default: int,
@@ -90,6 +103,30 @@ def _parse_nonblank_env(name: str, default: str) -> str:
 VECTOR_DB_PATH = "data/chroma"
 VECTOR_COLLECTION_NAME = "mini_rag_chunks"
 DEFAULT_TOP_K = 5
+CHUNK_MODE = _parse_choice_env(
+    "RAG_CHUNK_MODE", "standard", ("standard", "parent-child")
+)
+PARENT_CHUNK_SIZE = _parse_positive_int_env("RAG_PARENT_CHUNK_SIZE", 1000)
+PARENT_CHUNK_OVERLAP = _parse_nonnegative_int_env(
+    "RAG_PARENT_CHUNK_OVERLAP", 100
+)
+CHILD_CHUNK_SIZE = _parse_positive_int_env("RAG_CHILD_CHUNK_SIZE", 250)
+CHILD_CHUNK_OVERLAP = _parse_nonnegative_int_env("RAG_CHILD_CHUNK_OVERLAP", 50)
+PARENT_STORE_PATH = _parse_nonblank_env(
+    "RAG_PARENT_STORE_PATH", "data/parents/parents.sqlite3"
+)
+if CHILD_CHUNK_SIZE > PARENT_CHUNK_SIZE:
+    raise RuntimeError(
+        "RAG_CHILD_CHUNK_SIZE must be smaller than or equal to RAG_PARENT_CHUNK_SIZE"
+    )
+if PARENT_CHUNK_OVERLAP >= PARENT_CHUNK_SIZE:
+    raise RuntimeError(
+        "RAG_PARENT_CHUNK_OVERLAP must be smaller than RAG_PARENT_CHUNK_SIZE"
+    )
+if CHILD_CHUNK_OVERLAP >= CHILD_CHUNK_SIZE:
+    raise RuntimeError(
+        "RAG_CHILD_CHUNK_OVERLAP must be smaller than RAG_CHILD_CHUNK_SIZE"
+    )
 HYBRID_SPARSE_WEIGHT = 0.5
 HYBRID_DENSE_WEIGHT = 0.5
 HYBRID_TOP_K = 5

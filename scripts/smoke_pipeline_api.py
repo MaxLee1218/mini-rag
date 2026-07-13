@@ -149,6 +149,10 @@ def print_debug_prompt(result: RAGResult) -> None:
 def close_pipeline_resources(pipeline: RAGPipeline) -> None:
     try:
         retriever = getattr(pipeline, "retriever", None)
+        close_retriever = getattr(retriever, "close", None)
+        if callable(close_retriever):
+            close_retriever()
+            return
         dense_retriever = getattr(retriever, "dense_retriever", retriever)
         vector_store = getattr(dense_retriever, "vector_store", None)
         close = getattr(vector_store, "close", None)

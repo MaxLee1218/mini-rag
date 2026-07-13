@@ -37,6 +37,7 @@ class RAGPipeline:
         reranker: Any | None = None,
         candidate_k: int = 10,
         final_top_k: int = 5,
+        expand_retrieval_candidates: bool = True,
     ) -> None:
         self.retriever = retriever
         self.generator = generator
@@ -45,6 +46,9 @@ class RAGPipeline:
         self.reranker = reranker
         self.candidate_k = _validate_named_top_k(candidate_k, "candidate_k")
         self.final_top_k = _validate_named_top_k(final_top_k, "final_top_k")
+        if not isinstance(expand_retrieval_candidates, bool):
+            raise ValueError("expand_retrieval_candidates must be a boolean")
+        self.expand_retrieval_candidates = expand_retrieval_candidates
 
     def ask(
         self,
@@ -61,7 +65,11 @@ class RAGPipeline:
         resolved_top_k = (
             self.final_top_k if top_k is None else _validate_top_k(top_k)
         )
-        retrieval_top_k = max(self.candidate_k, resolved_top_k)
+        retrieval_top_k = (
+            max(self.candidate_k, resolved_top_k)
+            if self.expand_retrieval_candidates
+            else resolved_top_k
+        )
 
         candidates = _normalize_contexts(
             self.retriever.retrieve(query_for_retrieval, top_k=retrieval_top_k)

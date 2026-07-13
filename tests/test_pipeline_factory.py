@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from app.hybrid_retriever import HybridRetriever
 from app.pipeline_factory import build_default_pipeline
+from app.retriever import Retriever
 
 
 def test_default_pipeline_builds_hybrid_retriever_from_stored_chunks(monkeypatch, tmp_path):
@@ -95,3 +96,43 @@ def test_pipeline_source_does_not_hardcode_tinybert_model():
     from pathlib import Path
 
     assert "ms-marco-TinyBERT" not in Path("app/pipeline.py").read_text()
+
+
+def test_default_pipeline_parent_child_mode_builds_resolving_retriever(
+    monkeypatch, tmp_path
+):
+    import app.config as config
+    import app.embeddings as embeddings_module
+    import app.generator as generator_module
+    import app.parent_store as parent_store_module
+    import app.vector_store as vector_store_module
+
+    class FakeVectorStore:
+        def __init__(self, **kwargs):
+            self.collection = SimpleNamespace(get=lambda include=None: {})
+
+        def count(self):
+            return 2
+
+    fake_parent_store = object()
+    (tmp_path / "parents.sqlite3").touch()
+    monkeypatch.setattr(config, "VECTOR_DB_PATH", str(tmp_path))
+    monkeypatch.setattr(config, "CHUNK_MODE", "parent-child")
+    monkeypatch.setattr(config, "PARENT_STORE_PATH", str(tmp_path / "parents.sqlite3"))
+    monkeypatch.setattr(config, "RERANKER_ENABLED", False)
+    monkeypatch.setattr(config, "RERANKER_TOP_K", 4)
+    monkeypatch.setattr(embeddings_module, "Embedder", lambda: "embedder")
+    monkeypatch.setattr(vector_store_module, "ChromaVectorStore", FakeVectorStore)
+    monkeypatch.setattr(parent_store_module, "SQLiteParentStore", lambda path: fake_parent_store)
+    monkeypatch.setattr(
+        generator_module, "load_deepseek_config_from_env", lambda: SimpleNamespace()
+    )
+    monkeypatch.setattr(generator_module, "DeepSeekGenerator", lambda config: "generator")
+
+    pipeline = build_default_pipeline()
+
+    assert isinstance(pipeline.retriever, Retriever)
+    assert pipeline.retriever.mode == "parent-child"
+    assert pipeline.retriever.parent_store is fake_parent_store
+    assert pipeline.candidate_k == 4
+    assert pipeline.expand_retrieval_candidates is False

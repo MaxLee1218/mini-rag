@@ -4,6 +4,12 @@ import pytest
 
 
 CONFIG_ENV_KEYS = (
+    "RAG_CHUNK_MODE",
+    "RAG_PARENT_CHUNK_SIZE",
+    "RAG_PARENT_CHUNK_OVERLAP",
+    "RAG_CHILD_CHUNK_SIZE",
+    "RAG_CHILD_CHUNK_OVERLAP",
+    "RAG_PARENT_STORE_PATH",
     "DEEPSEEK_API_KEY",
     "DEEPSEEK_BASE_URL",
     "DEEPSEEK_MODEL",
@@ -44,6 +50,12 @@ def test_config_uses_defaults_without_api_keys(monkeypatch):
     assert config.VECTOR_DB_PATH == "data/chroma"
     assert config.VECTOR_COLLECTION_NAME == "mini_rag_chunks"
     assert config.DEFAULT_TOP_K == 5
+    assert config.CHUNK_MODE == "standard"
+    assert config.PARENT_CHUNK_SIZE == 1000
+    assert config.PARENT_CHUNK_OVERLAP == 100
+    assert config.CHILD_CHUNK_SIZE == 250
+    assert config.CHILD_CHUNK_OVERLAP == 50
+    assert config.PARENT_STORE_PATH == "data/parents/parents.sqlite3"
     assert config.DEEPSEEK_API_KEY is None
     assert config.DEEPSEEK_BASE_URL == "https://api.deepseek.com"
     assert config.DEEPSEEK_MODEL == "deepseek-v4-flash"
@@ -58,6 +70,51 @@ def test_config_uses_defaults_without_api_keys(monkeypatch):
     assert config.QUERY_REWRITE_ENABLED is True
     assert config.QUERY_REWRITE_PROVIDER == "deepseek"
     assert config.QUERY_REWRITE_TIMEOUT == 10.0
+
+
+def test_parent_child_config_reads_and_validates_environment(monkeypatch):
+    config = reload_config(
+        monkeypatch,
+        RAG_CHUNK_MODE="parent-child",
+        RAG_PARENT_CHUNK_SIZE="800",
+        RAG_PARENT_CHUNK_OVERLAP="80",
+        RAG_CHILD_CHUNK_SIZE="200",
+        RAG_CHILD_CHUNK_OVERLAP="20",
+        RAG_PARENT_STORE_PATH="tmp/parents.sqlite3",
+    )
+
+    assert config.CHUNK_MODE == "parent-child"
+    assert config.PARENT_CHUNK_SIZE == 800
+    assert config.CHILD_CHUNK_SIZE == 200
+    assert config.PARENT_STORE_PATH == "tmp/parents.sqlite3"
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"RAG_CHUNK_MODE": "other"}, "RAG_CHUNK_MODE must be one of"),
+        ({"RAG_PARENT_CHUNK_SIZE": "0"}, "RAG_PARENT_CHUNK_SIZE"),
+        (
+            {"RAG_PARENT_CHUNK_SIZE": "100", "RAG_CHILD_CHUNK_SIZE": "101"},
+            "RAG_CHILD_CHUNK_SIZE must be smaller",
+        ),
+        (
+            {
+                "RAG_PARENT_CHUNK_SIZE": "100",
+                "RAG_CHILD_CHUNK_SIZE": "50",
+                "RAG_PARENT_CHUNK_OVERLAP": "100",
+            },
+            "RAG_PARENT_CHUNK_OVERLAP must be smaller",
+        ),
+        (
+            {"RAG_CHILD_CHUNK_SIZE": "50", "RAG_CHILD_CHUNK_OVERLAP": "50"},
+            "RAG_CHILD_CHUNK_OVERLAP must be smaller",
+        ),
+    ],
+)
+def test_parent_child_config_rejects_invalid_values(monkeypatch, env, message):
+    with pytest.raises(RuntimeError, match=message):
+        reload_config(monkeypatch, **env)
 
 
 def test_query_rewrite_config_reads_environment_overrides(monkeypatch):

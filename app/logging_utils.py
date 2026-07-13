@@ -22,6 +22,7 @@ class RequestLog(TypedDict):
     query_was_rewritten: bool
     rewrite_reason: str
     history_turn_count: int
+    chunk_mode: Literal["standard", "parent-child"]
 
 
 def log_request(log_entry: RequestLog, log_file: Path | None = None) -> None:

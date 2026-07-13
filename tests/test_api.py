@@ -273,6 +273,28 @@ class _FakePipeline:
         return self.result
 
 
+def test_ask_log_records_effective_parent_child_mode(monkeypatch):
+    import app.api as api_module
+
+    pipeline = _FakePipeline()
+    pipeline.retriever = SimpleNamespace(mode="parent-child")
+    logged_entries = []
+    monkeypatch.setattr(api_module, "log_request", logged_entries.append)
+    api_module.app.dependency_overrides[api_module.get_pipeline] = lambda: pipeline
+    try:
+        response = asgi_request(
+            api_module.app,
+            "POST",
+            "/ask",
+            json={"question": "What is RAG?", "session_id": "api-log-mode"},
+        )
+    finally:
+        api_module.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert logged_entries[0]["chunk_mode"] == "parent-child"
+
+
 class _FailingPipeline:
     def ask(self, question, top_k=None, *, retrieval_query=None):
         raise RuntimeError(

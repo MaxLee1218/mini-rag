@@ -12,9 +12,11 @@ def build_default_pipeline(top_k: int | None = None) -> Any:
     """Build the default local RAG pipeline without doing work at import time."""
     from app.bm25_retriever import BM25Retriever
     from app.config import (
+        CHUNK_MODE,
         HYBRID_CANDIDATE_MULTIPLIER,
         HYBRID_DENSE_WEIGHT,
         HYBRID_SPARSE_WEIGHT,
+        PARENT_STORE_PATH,
         RERANKER_BATCH_SIZE,
         RERANKER_CANDIDATE_K,
         RERANKER_DEVICE,
@@ -31,6 +33,7 @@ def build_default_pipeline(top_k: int | None = None) -> Any:
     from app.generator import DeepSeekGenerator, load_deepseek_config_from_env
     from app.hybrid_retriever import HybridRetriever
     from app.pipeline import RAGPipeline
+    from app.parent_store import SQLiteParentStore
     from app.retriever import Retriever
     from app.reranker import CrossEncoderReranker
     from app.vector_store import ChromaVectorStore
@@ -46,24 +49,45 @@ def build_default_pipeline(top_k: int | None = None) -> Any:
         collection_name=VECTOR_COLLECTION_NAME,
         persist_path=str(persist_path),
     )
+    parent_store = None
     try:
         count = _get_vector_store_count(vector_store)
         if count is None or count == 0:
             raise VectorStoreNotReadyError("Please run scripts/ingest.py first.")
 
-        dense_retriever = Retriever(
-            embedder=embedder,
-            vector_store=vector_store,
-            default_top_k=resolved_top_k,
-        )
-        sparse_retriever = BM25Retriever(_load_stored_documents(vector_store))
-        retriever = HybridRetriever(
-            sparse_retriever=sparse_retriever,
-            dense_retriever=dense_retriever,
-            sparse_weight=HYBRID_SPARSE_WEIGHT,
-            dense_weight=HYBRID_DENSE_WEIGHT,
-            candidate_multiplier=HYBRID_CANDIDATE_MULTIPLIER,
-        )
+        if CHUNK_MODE == "parent-child":
+            parent_store_path = _resolved_project_path(PARENT_STORE_PATH)
+            if not parent_store_path.is_file():
+                raise VectorStoreNotReadyError(
+                    "Parent store is missing. Please run parent-child ingest first."
+                )
+            parent_store = SQLiteParentStore(parent_store_path)
+            parent_count = getattr(parent_store, "count", None)
+            if callable(parent_count) and int(parent_count()) == 0:
+                raise VectorStoreNotReadyError(
+                    "Parent store is empty. Please run parent-child ingest first."
+                )
+            retriever = Retriever(
+                embedder=embedder,
+                vector_store=vector_store,
+                default_top_k=resolved_top_k,
+                mode="parent-child",
+                parent_store=parent_store,
+            )
+        else:
+            dense_retriever = Retriever(
+                embedder=embedder,
+                vector_store=vector_store,
+                default_top_k=resolved_top_k,
+            )
+            sparse_retriever = BM25Retriever(_load_stored_documents(vector_store))
+            retriever = HybridRetriever(
+                sparse_retriever=sparse_retriever,
+                dense_retriever=dense_retriever,
+                sparse_weight=HYBRID_SPARSE_WEIGHT,
+                dense_weight=HYBRID_DENSE_WEIGHT,
+                candidate_multiplier=HYBRID_CANDIDATE_MULTIPLIER,
+            )
         generator = DeepSeekGenerator(config=config)
         reranker = None
         if RERANKER_ENABLED:
@@ -79,10 +103,16 @@ def build_default_pipeline(top_k: int | None = None) -> Any:
             retriever=retriever,
             generator=generator,
             reranker=reranker,
-            candidate_k=RERANKER_CANDIDATE_K,
+            candidate_k=(
+                resolved_top_k if CHUNK_MODE == "parent-child" else RERANKER_CANDIDATE_K
+            ),
             final_top_k=resolved_top_k,
+            expand_retrieval_candidates=CHUNK_MODE != "parent-child",
         )
     except Exception:
+        close_parent_store = getattr(parent_store, "close", None)
+        if callable(close_parent_store):
+            close_parent_store()
         close = getattr(vector_store, "close", None)
         if callable(close):
             close()
@@ -119,6 +149,10 @@ def _get_vector_store_count(vector_store: Any) -> int | None:
 
 
 def _resolved_vector_db_path(path: str) -> Path:
+    return _resolved_project_path(path)
+
+
+def _resolved_project_path(path: str | Path) -> Path:
     resolved_path = Path(path)
     if resolved_path.is_absolute():
         return resolved_path
