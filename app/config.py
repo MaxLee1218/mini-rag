@@ -26,6 +26,20 @@ def _parse_float_env(name: str, default: float) -> float:
         raise RuntimeError(f"{name} must be a valid number") from error
 
 
+def _parse_nonnegative_float_env(name: str, default: float) -> float:
+    parsed = _parse_float_env(name, default)
+    if parsed < 0:
+        raise RuntimeError(f"{name} must be non-negative")
+    return parsed
+
+
+def _parse_positive_float_env(name: str, default: float) -> float:
+    parsed = _parse_float_env(name, default)
+    if parsed <= 0:
+        raise RuntimeError(f"{name} must be positive")
+    return parsed
+
+
 def _parse_bool_env(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -131,6 +145,24 @@ HYBRID_SPARSE_WEIGHT = 0.5
 HYBRID_DENSE_WEIGHT = 0.5
 HYBRID_TOP_K = 5
 HYBRID_CANDIDATE_MULTIPLIER = 2
+
+FAQ_ENABLED = _parse_bool_env("FAQ_ENABLED", True)
+_FAQ_DB_PATH_VALUE = _parse_nonblank_env("FAQ_DB_PATH", "data/faq.db")
+FAQ_DB_PATH = Path(_FAQ_DB_PATH_VALUE)
+if not FAQ_DB_PATH.is_absolute():
+    FAQ_DB_PATH = PROJECT_ROOT / FAQ_DB_PATH
+FAQ_MATCH_THRESHOLD = _parse_nonnegative_float_env("FAQ_MATCH_THRESHOLD", 1.0)
+FAQ_MATCH_MARGIN = _parse_nonnegative_float_env("FAQ_MATCH_MARGIN", 0.15)
+FAQ_CACHE_ENABLED = _parse_bool_env("FAQ_CACHE_ENABLED", True)
+FAQ_CACHE_TTL_SECONDS = _parse_positive_int_env("FAQ_CACHE_TTL_SECONDS", 86400)
+FAQ_CACHE_PREWARM = _parse_bool_env("FAQ_CACHE_PREWARM", True)
+REDIS_URL = _parse_nonblank_env("REDIS_URL", "redis://localhost:6379/0")
+REDIS_CONNECT_TIMEOUT_SECONDS = _parse_positive_float_env(
+    "REDIS_CONNECT_TIMEOUT_SECONDS", 0.2
+)
+REDIS_SOCKET_TIMEOUT_SECONDS = _parse_positive_float_env(
+    "REDIS_SOCKET_TIMEOUT_SECONDS", 0.2
+)
 
 CONVERSATION_HISTORY_LIMIT = _parse_bounded_int_env(
     "CONVERSATION_HISTORY_LIMIT", 5, 3, 5

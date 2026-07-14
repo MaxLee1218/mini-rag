@@ -31,6 +31,10 @@ httpx
 numpy
 pandas
 rank-bm25
+jieba
+
+# FAQ cache
+redis
 
 # Utilities
 tiktoken

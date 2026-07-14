@@ -18,6 +18,8 @@ This project implements a complete basic Retrieval-Augmented Generation pipeline
 - Run real full-chain smoke tests
 - Ask questions through a formal CLI entrypoint
 - Expose `GET /health` and `POST /ask` through FastAPI
+- Route maintained frequent questions through an FAQ fast path before RAG
+- Cache positive FAQ matches in optional Redis with SQLite as the source of truth
 - Unit tests for core modules and CLI behavior
 
 ## Project Structure
@@ -89,6 +91,148 @@ RAG Pipeline Result
 The main runtime entrypoint is `app/pipeline.py`.
 
 `RAGPipeline` connects retrieval, prompt building, generation, and source handling into one stable interface.
+
+## FAQ Fast Path and RAG Deep Path
+
+Online questions use two deliberately separate paths:
+
+```text
+Question
+  -> normalize
+  -> Redis FAQ L1 cache
+  -> SQLite-backed in-process FAQ BM25 matcher
+  -> FAQ hit: maintained answer, no query rewrite/retrieval/prompt/LLM
+  -> FAQ miss: conversation query rewrite
+  -> document BM25 + vector retrieval + score fusion
+  -> optional reranking -> prompt -> DeepSeek generator
+```
+
+SQLite is the only persistent FAQ source. Redis contains positive query-result
+cache entries and can be stopped without losing FAQ behavior. The FAQ BM25
+index contains only FAQ questions and aliases; the existing document BM25 index
+contains knowledge-base chunks and remains part of `HybridRetriever`.
+
+The fast path reduces average latency and provider cost for frequent standard
+questions and keeps answers stable and manually maintainable. Complex questions
+still use the full RAG path and preserve sources from the original knowledge
+base files.
+
+Example fast path:
+
+```text
+什么是 RAG？
+-> Redis or FAQ BM25 match
+-> route=faq
+-> return maintained answer without Generator
+```
+
+Example deep path:
+
+```text
+根据知识库比较 Redis 和 Chroma 在当前项目中的职责
+-> FAQ miss
+-> route=rag
+-> hybrid retrieval -> prompt -> Generator
+```
+
+### FAQ and Redis configuration
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `FAQ_ENABLED` | `true` | Enable FAQ routing. |
+| `FAQ_DB_PATH` | `data/faq.db` | SQLite FAQ database, relative to project root unless absolute. |
+| `FAQ_MATCH_THRESHOLD` | `1.0` | Minimum raw FAQ BM25 score. |
+| `FAQ_MATCH_MARGIN` | `0.15` | Minimum gap from the second distinct FAQ. |
+| `FAQ_CACHE_ENABLED` | `true` | Enable Redis positive-match caching. |
+| `FAQ_CACHE_TTL_SECONDS` | `86400` | Positive cache TTL. |
+| `FAQ_CACHE_PREWARM` | `true` | Prewarm canonical and alias exact queries. |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL; never written to request logs. |
+| `REDIS_CONNECT_TIMEOUT_SECONDS` | `0.2` | Redis connection timeout. |
+| `REDIS_SOCKET_TIMEOUT_SECONDS` | `0.2` | Redis operation timeout. |
+
+Threshold and margin are raw BM25 score controls, not probabilities.
+
+### Start the dual-path API
+
+```bash
+docker compose up -d redis
+python -m scripts.faq_admin init
+python -m scripts.faq_admin import data/faqs.example.json
+python -m scripts.faq_admin list
+python -m uvicorn app.api:app --reload
+```
+
+Stop only Redis with:
+
+```bash
+docker compose stop redis
+```
+
+FAQ request:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"faq-demo","question":"RAG 是什么？"}'
+```
+
+The response retains the original fields and adds route metadata:
+
+```json
+{
+  "question": "RAG 是什么？",
+  "answer": "RAG 是 Retrieval-Augmented Generation……",
+  "sources": [{"index": 1, "source": "README.md"}],
+  "route": "faq",
+  "faq_id": "faq-rag-definition",
+  "faq_score": 1.0,
+  "faq_match_type": "alias",
+  "faq_cache_hit": false
+}
+```
+
+RAG request:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"rag-demo","question":"根据知识库比较 Redis 和 Chroma 在当前项目中的职责"}'
+```
+
+Its response has `"route": "rag"`, null FAQ fields, and the existing RAG
+answer and source objects.
+
+### Dual-path smoke checks
+
+FAQ smoke uses the real SQLite FAQ database and does not need a DeepSeek key:
+
+```bash
+python -m scripts.smoke_pipeline_api \
+  --route faq \
+  --question "RAG 是什么？" \
+  --expect-route faq
+```
+
+RAG smoke uses the existing Chroma data, document BM25, hybrid fusion,
+reranking configuration, and real generator:
+
+```bash
+python -m scripts.smoke_pipeline_api \
+  --route rag \
+  --question "根据知识库比较 Redis 和 Chroma 在当前项目中的职责" \
+  --expect-route rag
+```
+
+Failure behavior is predictable:
+
+- Redis unavailable: the immutable in-process FAQ matcher continues working.
+- FAQ database unavailable at initialization: FAQ routing is disabled and the
+  request enters RAG.
+- FAQ miss or matcher error: the request enters RAG; it is not converted into
+  a fabricated no-answer response.
+- RAG requires the existing vector data and DeepSeek provider configuration.
+- After importing changed FAQ data, restart the API process to rebuild the
+  immutable in-process FAQ BM25 index. This release has no online reload.
 
 ## Requirements
 

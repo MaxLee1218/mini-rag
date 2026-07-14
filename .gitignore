@@ -220,6 +220,9 @@ __marimo__/
 # Chroma vector database
 data/chroma/
 data/parents/
+data/faq.db
+data/faq.db-shm
+data/faq.db-wal
 .chroma/
 
 # Private local documents

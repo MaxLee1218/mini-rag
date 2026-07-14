@@ -29,6 +29,16 @@ CONFIG_ENV_KEYS = (
     "QUERY_REWRITE_ENABLED",
     "QUERY_REWRITE_PROVIDER",
     "QUERY_REWRITE_TIMEOUT",
+    "FAQ_ENABLED",
+    "FAQ_DB_PATH",
+    "FAQ_MATCH_THRESHOLD",
+    "FAQ_MATCH_MARGIN",
+    "FAQ_CACHE_ENABLED",
+    "FAQ_CACHE_TTL_SECONDS",
+    "FAQ_CACHE_PREWARM",
+    "REDIS_URL",
+    "REDIS_CONNECT_TIMEOUT_SECONDS",
+    "REDIS_SOCKET_TIMEOUT_SECONDS",
 )
 
 
@@ -70,6 +80,62 @@ def test_config_uses_defaults_without_api_keys(monkeypatch):
     assert config.QUERY_REWRITE_ENABLED is True
     assert config.QUERY_REWRITE_PROVIDER == "deepseek"
     assert config.QUERY_REWRITE_TIMEOUT == 10.0
+    assert config.FAQ_ENABLED is True
+    assert config.FAQ_DB_PATH == config.PROJECT_ROOT / "data/faq.db"
+    assert config.FAQ_MATCH_THRESHOLD == 1.0
+    assert config.FAQ_MATCH_MARGIN == 0.15
+    assert config.FAQ_CACHE_ENABLED is True
+    assert config.FAQ_CACHE_TTL_SECONDS == 86400
+    assert config.FAQ_CACHE_PREWARM is True
+    assert config.REDIS_URL == "redis://localhost:6379/0"
+    assert config.REDIS_CONNECT_TIMEOUT_SECONDS == 0.2
+    assert config.REDIS_SOCKET_TIMEOUT_SECONDS == 0.2
+
+
+def test_faq_config_reads_environment_overrides(monkeypatch, tmp_path):
+    config = reload_config(
+        monkeypatch,
+        FAQ_ENABLED="false",
+        FAQ_DB_PATH=str(tmp_path / "custom.db"),
+        FAQ_MATCH_THRESHOLD="2.5",
+        FAQ_MATCH_MARGIN="0.4",
+        FAQ_CACHE_ENABLED="false",
+        FAQ_CACHE_TTL_SECONDS="60",
+        FAQ_CACHE_PREWARM="false",
+        REDIS_URL="redis://cache:6380/2",
+        REDIS_CONNECT_TIMEOUT_SECONDS="0.5",
+        REDIS_SOCKET_TIMEOUT_SECONDS="0.6",
+    )
+
+    assert config.FAQ_ENABLED is False
+    assert config.FAQ_DB_PATH == tmp_path / "custom.db"
+    assert config.FAQ_MATCH_THRESHOLD == 2.5
+    assert config.FAQ_MATCH_MARGIN == 0.4
+    assert config.FAQ_CACHE_ENABLED is False
+    assert config.FAQ_CACHE_TTL_SECONDS == 60
+    assert config.FAQ_CACHE_PREWARM is False
+    assert config.REDIS_URL == "redis://cache:6380/2"
+    assert config.REDIS_CONNECT_TIMEOUT_SECONDS == 0.5
+    assert config.REDIS_SOCKET_TIMEOUT_SECONDS == 0.6
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("FAQ_MATCH_THRESHOLD", "-1", "FAQ_MATCH_THRESHOLD"),
+        ("FAQ_MATCH_MARGIN", "-0.1", "FAQ_MATCH_MARGIN"),
+        ("FAQ_CACHE_TTL_SECONDS", "0", "FAQ_CACHE_TTL_SECONDS"),
+        ("REDIS_CONNECT_TIMEOUT_SECONDS", "0", "REDIS_CONNECT_TIMEOUT_SECONDS"),
+        ("REDIS_SOCKET_TIMEOUT_SECONDS", "-1", "REDIS_SOCKET_TIMEOUT_SECONDS"),
+        ("FAQ_ENABLED", "perhaps", "FAQ_ENABLED must be a boolean"),
+        ("FAQ_CACHE_PREWARM", "perhaps", "FAQ_CACHE_PREWARM must be a boolean"),
+        ("FAQ_DB_PATH", " ", "FAQ_DB_PATH must not be blank"),
+        ("REDIS_URL", " ", "REDIS_URL must not be blank"),
+    ],
+)
+def test_faq_config_rejects_invalid_values(monkeypatch, name, value, message):
+    with pytest.raises(RuntimeError, match=message):
+        reload_config(monkeypatch, **{name: value})
 
 
 def test_parent_child_config_reads_and_validates_environment(monkeypatch):

@@ -102,6 +102,8 @@ def test_ask_returns_answer_sources_and_latency():
     body = response.json()
     assert body["question"] == "RAG是什么？"
     assert body["answer"] == "RAG 是检索增强生成。"
+    assert body["route"] == "rag"
+    assert body["faq_id"] is None
     assert body["sources"] == [
         {
             "index": 1,
@@ -116,7 +118,8 @@ def test_ask_returns_answer_sources_and_latency():
         {
             "question": "RAG是什么？",
             "top_k": 5,
-            "retrieval_query": "RAG是什么？",
+            "retrieval_query": None,
+            "session_id": "api-answer",
         }
     ]
 
@@ -141,7 +144,8 @@ def test_ask_passes_requested_top_k_to_pipeline():
         {
             "question": "RAG是什么？",
             "top_k": 3,
-            "retrieval_query": "RAG是什么？",
+            "retrieval_query": None,
+            "session_id": "api-top-k",
         }
     ]
 
@@ -262,12 +266,15 @@ class _FakePipeline:
         )
         self.calls = []
 
-    def ask(self, question, top_k=None, *, retrieval_query=None):
+    def ask(
+        self, question, top_k=None, *, retrieval_query=None, session_id=None
+    ):
         self.calls.append(
             {
                 "question": question,
                 "top_k": top_k,
                 "retrieval_query": retrieval_query,
+                "session_id": session_id,
             }
         )
         return self.result
@@ -296,7 +303,9 @@ def test_ask_log_records_effective_parent_child_mode(monkeypatch):
 
 
 class _FailingPipeline:
-    def ask(self, question, top_k=None, *, retrieval_query=None):
+    def ask(
+        self, question, top_k=None, *, retrieval_query=None, session_id=None
+    ):
         raise RuntimeError(
             "boom with key sk-secret and path C:\\Users\\mingx\\project\\.env"
         )
@@ -335,6 +344,8 @@ def test_ask_logs_success(monkeypatch):
     assert log_entry["sources"] == ["rag_notes.md"]
     assert log_entry["status"] == "success"
     assert log_entry["error_type"] is None
+    assert log_entry["route"] == "rag"
+    assert log_entry["faq_id"] is None
     assert isinstance(log_entry["latency_ms"], int)
     assert UUID(log_entry["request_id"]).version == 4
 
@@ -367,6 +378,49 @@ def test_ask_logs_error_without_sensitive_exception_details(monkeypatch):
     assert log_entry["status"] == "error"
     assert log_entry["error_type"] == "RuntimeError"
     assert "sk-secret" not in json.dumps(log_entry)
+
+
+def test_ask_returns_faq_route_metadata_and_logs_once(monkeypatch):
+    import app.api as api_module
+
+    logged_entries = []
+    monkeypatch.setattr(api_module, "log_request", logged_entries.append)
+    result = SimpleNamespace(
+        question="什么是 RAG？",
+        answer="标准答案",
+        sources=["README.md"],
+        contexts=[],
+        route="faq",
+        faq_id="faq-rag",
+        faq_score=1.0,
+        faq_match_type="exact",
+        faq_cache_hit=False,
+        rewritten_query="什么是 RAG？",
+        query_was_rewritten=False,
+        rewrite_reason="faq_fast_path",
+        history_turn_count=0,
+    )
+    api_module.app.dependency_overrides[api_module.get_pipeline] = lambda: _FakePipeline(result)
+    try:
+        response = asgi_request(
+            api_module.app,
+            "POST",
+            "/ask",
+            json={"question": "什么是 RAG？", "session_id": "faq-api"},
+        )
+    finally:
+        api_module.app.dependency_overrides.clear()
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["route"] == "faq"
+    assert body["faq_id"] == "faq-rag"
+    assert body["faq_score"] == 1.0
+    assert body["faq_match_type"] == "exact"
+    assert body["faq_cache_hit"] is False
+    assert len(logged_entries) == 1
+    assert logged_entries[0]["route"] == "faq"
+    assert logged_entries[0]["faq_id"] == "faq-rag"
 
 
 def test_ask_bounds_question_fields_in_request_log(monkeypatch):

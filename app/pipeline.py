@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from app.prompt_builder import (
     append_sources_to_answer,
@@ -22,6 +22,15 @@ class RAGResult:
     contexts: list[Any]
     sources: list[str]
     prompt: str | None = None
+    route: Literal["faq", "rag"] = "rag"
+    faq_id: str | None = None
+    faq_score: float | None = None
+    faq_match_type: str | None = None
+    faq_cache_hit: bool = False
+    rewritten_query: str | None = None
+    query_was_rewritten: bool = False
+    rewrite_reason: str = "not_rewritten"
+    history_turn_count: int = 0
 
 
 class RAGPipeline:
@@ -57,7 +66,7 @@ class RAGPipeline:
         *,
         retrieval_query: str | None = None,
     ) -> RAGResult:
-        clean_question = _validate_question(question)
+        clean_question = validate_question(question)
         query_for_retrieval = _resolve_retrieval_query(
             retrieval_query,
             clean_question,
@@ -135,7 +144,7 @@ class RAGPipeline:
         raise ValueError("generator must be callable or provide generate()")
 
 
-def _validate_question(question: Any) -> str:
+def validate_question(question: Any) -> str:
     if not isinstance(question, str) or not question.strip():
         raise ValueError("question must not be blank")
     return question.strip()

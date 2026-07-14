@@ -23,6 +23,11 @@ class RequestLog(TypedDict):
     rewrite_reason: str
     history_turn_count: int
     chunk_mode: Literal["standard", "parent-child"]
+    route: Literal["faq", "rag"]
+    faq_id: str | None
+    faq_score: float | None
+    faq_match_type: str | None
+    faq_cache_hit: bool
 
 
 def log_request(log_entry: RequestLog, log_file: Path | None = None) -> None:

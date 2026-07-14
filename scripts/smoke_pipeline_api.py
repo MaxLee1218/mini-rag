@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.config import DEFAULT_TOP_K
-from app.pipeline import RAGPipeline, RAGResult
-from app.pipeline_factory import build_default_pipeline
+from app.pipeline import RAGResult
+from app.pipeline_factory import get_default_dual_path_pipeline
 from app.prompt_builder import extract_context_text
 
 
@@ -41,10 +42,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         )
     )
     parser.add_argument(
-        "question",
+        "positional_question",
         nargs="?",
-        default=DEFAULT_QUESTION,
+        default=None,
         help="Question to ask the RAG pipeline.",
+    )
+    parser.add_argument(
+        "--question",
+        dest="question_option",
+        help="Question to ask the selected route.",
+    )
+    parser.add_argument(
+        "--route",
+        choices=("faq", "rag"),
+        default="rag",
+        help="Route being exercised by this smoke run.",
+    )
+    parser.add_argument(
+        "--expect-route",
+        choices=("faq", "rag"),
+        help="Exit nonzero unless the result uses this route.",
     )
     parser.add_argument(
         "--top-k",
@@ -62,15 +79,25 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the prompt preview sent to the generator.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.question = args.question_option or args.positional_question or DEFAULT_QUESTION
+    return args
 
 
-def build_pipeline() -> RAGPipeline:
-    return build_default_pipeline()
+def build_pipeline() -> Any:
+    return get_default_dual_path_pipeline()
 
 
-def print_result(result: RAGResult) -> None:
+def print_result(result: RAGResult, *, latency_ms: float) -> None:
     print("=== RAG Pipeline Smoke Test ===")
+    print()
+    print(f"route: {result.route}")
+    print(f"latency_ms: {latency_ms:.3f}")
+    if result.route == "faq":
+        print(f"faq_id: {result.faq_id}")
+        print(f"faq_score: {result.faq_score}")
+        print(f"faq_match_type: {result.faq_match_type}")
+        print(f"faq_cache_hit: {str(result.faq_cache_hit).lower()}")
     print()
     print("Question:")
     print(result.question)
@@ -89,13 +116,13 @@ def print_result(result: RAGResult) -> None:
     print(len(result.contexts))
     print()
 
-    if not result.contexts:
+    if result.route == "rag" and not result.contexts:
         print(
             "WARNING: Retriever returned 0 contexts. Please check whether data/chroma "
             "exists, ingest has run, collection name is correct, and the query is "
             "related to the documents."
         )
-    if not result.sources:
+    if result.route == "rag" and not result.sources:
         print(
             "WARNING: No sources were returned. Please check whether metadata.source "
             "is preserved during ingest/chunk/retrieval."
@@ -146,7 +173,7 @@ def print_debug_prompt(result: RAGResult) -> None:
     print()
 
 
-def close_pipeline_resources(pipeline: RAGPipeline) -> None:
+def close_pipeline_resources(pipeline: Any) -> None:
     try:
         retriever = getattr(pipeline, "retriever", None)
         close_retriever = getattr(retriever, "close", None)
@@ -167,18 +194,27 @@ def close_pipeline_resources(pipeline: RAGPipeline) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    pipeline: RAGPipeline | None = None
+    pipeline: Any | None = None
     try:
         pipeline = build_pipeline()
+        started_at = time.perf_counter()
         result = pipeline.ask(args.question, top_k=args.top_k)
+        latency_ms = (time.perf_counter() - started_at) * 1000
         if args.debug_context:
             print_debug_contexts(result)
         if args.debug_prompt:
             print_debug_prompt(result)
-        print_result(result)
+        print_result(result, latency_ms=latency_ms)
+        expected_route = args.expect_route or args.route
+        if result.route != expected_route:
+            print(
+                f"ERROR: expected route {expected_route}, got {result.route}",
+                file=sys.stderr,
+            )
+            return 1
     except Exception as exc:
         print(f"ERROR: Smoke test failed: {exc}", file=sys.stderr)
-        raise
+        return 1
     finally:
         if pipeline is not None:
             close_pipeline_resources(pipeline)

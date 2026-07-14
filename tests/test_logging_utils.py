@@ -23,6 +23,11 @@ def _request_log(*, status: str = "success", error_type: str | None = None) -> R
         "rewrite_reason": "independent_query",
         "history_turn_count": 0,
         "chunk_mode": "standard",
+        "route": "rag",
+        "faq_id": None,
+        "faq_score": None,
+        "faq_match_type": None,
+        "faq_cache_hit": False,
     }
 
 

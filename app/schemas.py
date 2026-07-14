@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -40,6 +40,11 @@ class AskResponse(BaseModel):
     sources: list[Source] = Field(default_factory=list)
     latency_ms: float
     session_id: str
+    route: Literal["faq", "rag"] = "rag"
+    faq_id: str | None = None
+    faq_score: float | None = None
+    faq_match_type: str | None = None
+    faq_cache_hit: bool = False
 
 
 class HealthResponse(BaseModel):

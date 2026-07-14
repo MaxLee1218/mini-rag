@@ -1,11 +1,135 @@
 from __future__ import annotations
 
+import logging
+import threading
 from pathlib import Path
 from typing import Any
 
 
+logger = logging.getLogger(__name__)
+_default_dual_path_pipeline: Any | None = None
+_default_dual_path_lock = threading.Lock()
+
+
 class VectorStoreNotReadyError(RuntimeError):
     """Raised when the local vector database is missing or empty."""
+
+
+def build_default_dual_path_pipeline(top_k: int | None = None) -> Any:
+    """Build FAQ routing without eagerly constructing the deep RAG path."""
+    from app import config
+    from app.dependencies import query_preparer
+    from app.dual_path_pipeline import DualPathPipeline
+    from app.faq.cache import NullFAQCache, RedisFAQCache
+    from app.faq.matcher import FAQMatcher
+    from app.faq.models import FAQMatch
+    from app.faq.repository import FAQRepository
+    from app.faq.text import normalize_question
+
+    records = []
+    index_version = 0
+    if config.FAQ_ENABLED:
+        try:
+            repository = FAQRepository(config.FAQ_DB_PATH)
+            repository.ensure_schema()
+            records = repository.list_enabled()
+            index_version = repository.get_index_version()
+        except Exception as error:
+            logger.exception(
+                "faq_fast_path_initialization_failed",
+                extra={"error_type": type(error).__name__},
+            )
+            records = []
+            index_version = 0
+
+    matcher = FAQMatcher(
+        records,
+        threshold=config.FAQ_MATCH_THRESHOLD,
+        margin=config.FAQ_MATCH_MARGIN,
+    )
+    cache: Any = NullFAQCache()
+    if config.FAQ_ENABLED and config.FAQ_CACHE_ENABLED:
+        try:
+            from redis import Redis
+
+            client = Redis.from_url(
+                config.REDIS_URL,
+                socket_connect_timeout=config.REDIS_CONNECT_TIMEOUT_SECONDS,
+                socket_timeout=config.REDIS_SOCKET_TIMEOUT_SECONDS,
+                decode_responses=True,
+            )
+            cache = RedisFAQCache(
+                client,
+                ttl_seconds=config.FAQ_CACHE_TTL_SECONDS,
+            )
+        except Exception as error:
+            logger.warning(
+                "faq_cache_initialization_failed",
+                extra={"error_type": type(error).__name__},
+            )
+            cache = NullFAQCache()
+
+    if records and config.FAQ_CACHE_PREWARM:
+        for record in records:
+            surfaces = [
+                (record.question, "exact"),
+                *((alias, "alias") for alias in record.aliases),
+            ]
+            for surface, match_type in surfaces:
+                cache.set(
+                    normalize_question(surface),
+                    index_version,
+                    FAQMatch(
+                        faq_id=record.id,
+                        question=record.question,
+                        answer=record.answer,
+                        source=record.source,
+                        score=1.0,
+                        match_type=match_type,
+                    ),
+                )
+
+    return DualPathPipeline(
+        faq_matcher=matcher,
+        faq_cache=cache,
+        rag_pipeline_provider=_lazy_rag_pipeline_provider(top_k),
+        faq_index_version=index_version,
+        rag_query_preparer=query_preparer,
+    )
+
+
+def get_default_dual_path_pipeline(top_k: int | None = None) -> Any:
+    """Return the process-wide immutable FAQ router and lazy RAG provider."""
+    global _default_dual_path_pipeline
+    if _default_dual_path_pipeline is not None:
+        return _default_dual_path_pipeline
+    with _default_dual_path_lock:
+        if _default_dual_path_pipeline is None:
+            _default_dual_path_pipeline = build_default_dual_path_pipeline(top_k)
+    return _default_dual_path_pipeline
+
+
+def reset_default_dual_path_pipeline() -> None:
+    """Clear the process singleton for isolated tests."""
+    global _default_dual_path_pipeline
+    with _default_dual_path_lock:
+        _default_dual_path_pipeline = None
+
+
+def _lazy_rag_pipeline_provider(top_k: int | None) -> Any:
+    pipeline: Any | None = None
+    lock = threading.Lock()
+
+    def provide() -> Any:
+        nonlocal pipeline
+        if pipeline is not None:
+            return pipeline
+        with lock:
+            if pipeline is None:
+                pipeline = build_default_pipeline(top_k)
+        return pipeline
+
+    return provide
 
 
 def build_default_pipeline(top_k: int | None = None) -> Any:

@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 
 from app.hybrid_retriever import HybridRetriever
+from app.faq.models import FAQRecord
+from app.faq.repository import FAQRepository
+from app.pipeline import RAGResult
 from app.pipeline_factory import build_default_pipeline
 from app.retriever import Retriever
 
@@ -136,3 +139,113 @@ def test_default_pipeline_parent_child_mode_builds_resolving_retriever(
     assert pipeline.retriever.parent_store is fake_parent_store
     assert pipeline.candidate_k == 4
     assert pipeline.expand_retrieval_candidates is False
+
+
+def _seed_faq(path):
+    repository = FAQRepository(path)
+    repository.import_records(
+        [
+            FAQRecord(
+                id="faq-rag",
+                question="什么是 RAG？",
+                aliases=("RAG 是什么？",),
+                answer="标准答案",
+                source="README.md",
+            )
+        ]
+    )
+
+
+def _fake_rag_result(question="深度问题"):
+    return RAGResult(
+        question=question,
+        answer="rag answer",
+        contexts=[],
+        sources=[],
+        prompt="prompt",
+    )
+
+
+def test_dual_factory_faq_hit_does_not_build_deep_pipeline(
+    monkeypatch, tmp_path
+):
+    import app.config as config
+    import app.pipeline_factory as factory
+
+    db_path = tmp_path / "faq.db"
+    _seed_faq(db_path)
+    monkeypatch.setattr(config, "FAQ_ENABLED", True)
+    monkeypatch.setattr(config, "FAQ_DB_PATH", db_path)
+    monkeypatch.setattr(config, "FAQ_CACHE_ENABLED", False)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("deep pipeline must stay lazy")
+
+    monkeypatch.setattr(factory, "build_default_pipeline", forbidden)
+
+    pipeline = factory.build_default_dual_path_pipeline()
+    result = pipeline.ask("RAG 是什么？")
+
+    assert result.route == "faq"
+    assert result.answer == "标准答案"
+
+
+def test_dual_factory_disabled_faq_calls_deep_pipeline_lazily(monkeypatch):
+    import app.config as config
+    import app.pipeline_factory as factory
+
+    calls = []
+
+    class FakeRAG:
+        def ask(self, question, top_k=None, *, retrieval_query=None):
+            return _fake_rag_result(question)
+
+    monkeypatch.setattr(config, "FAQ_ENABLED", False)
+    monkeypatch.setattr(
+        factory,
+        "build_default_pipeline",
+        lambda top_k=None: calls.append(top_k) or FakeRAG(),
+    )
+    pipeline = factory.build_default_dual_path_pipeline(top_k=6)
+    assert calls == []
+
+    assert pipeline.ask("深度问题", retrieval_query="深度问题").route == "rag"
+    assert calls == [6]
+
+
+def test_dual_factory_faq_database_failure_degrades_to_rag(
+    monkeypatch, tmp_path
+):
+    import app.config as config
+    import app.pipeline_factory as factory
+
+    db_directory = tmp_path / "not-a-database"
+    db_directory.mkdir()
+
+    class FakeRAG:
+        def ask(self, question, top_k=None, *, retrieval_query=None):
+            return _fake_rag_result(question)
+
+    monkeypatch.setattr(config, "FAQ_ENABLED", True)
+    monkeypatch.setattr(config, "FAQ_DB_PATH", db_directory)
+    monkeypatch.setattr(config, "FAQ_CACHE_ENABLED", False)
+    monkeypatch.setattr(factory, "build_default_pipeline", lambda top_k=None: FakeRAG())
+
+    pipeline = factory.build_default_dual_path_pipeline()
+
+    assert pipeline.ask("深度问题", retrieval_query="深度问题").route == "rag"
+
+
+def test_default_dual_pipeline_is_a_process_singleton(monkeypatch):
+    import app.config as config
+    import app.pipeline_factory as factory
+
+    monkeypatch.setattr(config, "FAQ_ENABLED", False)
+    factory.reset_default_dual_path_pipeline()
+    try:
+        first = factory.get_default_dual_path_pipeline()
+        second = factory.get_default_dual_path_pipeline()
+    finally:
+        factory.reset_default_dual_path_pipeline()
+
+    assert first is second
