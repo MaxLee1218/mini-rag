@@ -20,6 +20,8 @@ This project implements a complete basic Retrieval-Augmented Generation pipeline
 - Expose `GET /health` and `POST /ask` through FastAPI
 - Route maintained frequent questions through an FAQ fast path before RAG
 - Cache positive FAQ matches in optional Redis with SQLite as the source of truth
+- Run offline retrieval, RAGAS quality, and stage-latency evaluation
+- Generate versioned JSON and human-readable Markdown evaluation reports
 - Unit tests for core modules and CLI behavior
 
 ## Project Structure
@@ -56,6 +58,9 @@ mini-rag/
 │   └── ask.py                  # Formal CLI question-answering entrypoint
 │
 ├── tests/                      # Unit tests
+├── evaluation/                 # Offline dataset, metrics, tracing, and reports
+├── eval/run_eval.py            # Offline evaluation entrypoint
+├── reports/                    # Generated evaluation report snapshots
 ├── .env.example                # Environment variable template
 ├── .gitignore
 ├── README.md
@@ -248,6 +253,10 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+`ragas` is installed through `requirements.txt`; it is imported only by the
+offline evaluation command and is not required when importing or serving the
+normal RAG application modules.
+
 If you are using a virtual environment:
 
 ```bash
@@ -263,6 +272,129 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
+
+## Evaluation
+
+A RAG failure cannot be diagnosed reliably by reading only the final answer.
+An irrelevant retrieved chunk is a retrieval failure, while an unsupported
+claim made despite useful evidence is a generation failure. The offline
+evaluation layer measures these boundaries separately and keeps evaluation out
+of the online ingest, query, ask, and API flows.
+
+The default flow is:
+
+```text
+evaluation dataset
+  -> existing RAGPipeline.ask()
+  -> answer, contexts, sources, stage latency
+  -> retrieval hit and abstention evaluation
+  -> RAGAS generation/retrieval metrics
+  -> p50/p95 latency aggregation
+  -> JSON and Markdown reports
+```
+
+### Run the evaluation
+
+Activate the project environment, install dependencies, ingest the current
+documents, and configure both provider keys in `.env`:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+python scripts/ingest.py
+python eval/run_eval.py
+```
+
+The pipeline itself uses the existing DeepSeek configuration. RAGAS uses the
+configured OpenAI evaluator model and embedding model. Unit tests never make
+provider calls; `python eval/run_eval.py` is the explicit live-provider command.
+
+Optional path and retrieval overrides are available without changing source:
+
+```bash
+python eval/run_eval.py \
+  --dataset evaluation/dataset/eval_dataset.json \
+  --json-report reports/evaluation_report.json \
+  --markdown-report reports/evaluation_report.md \
+  --top-k 5
+```
+
+### Dataset contract
+
+Each JSON row requires `question` and `ground_truth`. The checked-in dataset also
+uses two optional evaluation fields:
+
+```json
+{
+  "question": "What does RAG retrieve before generating an answer?",
+  "ground_truth": "RAG retrieves relevant context before generating an answer.",
+  "reference_contexts": [
+    "Retrieval-Augmented Generation, or RAG, retrieves relevant context before generating an answer."
+  ],
+  "should_abstain": false
+}
+```
+
+- `reference_contexts` contains exact evidence from the repository documents and
+  supports a deterministic retrieval hit calculation.
+- `should_abstain` identifies questions whose answer is absent from the knowledge
+  base. These negative samples are excluded from the hit-rate denominator and
+  measured separately as abstention accuracy.
+
+This separation avoids penalizing a correct `Not found in knowledge base.`
+response as a retrieval miss.
+
+### Metrics
+
+| Layer | Metric | Meaning |
+| - | - | - |
+| Retrieval | Hit Rate | Fraction of answerable samples whose retrieved contexts contain an exact normalized reference context. |
+| Retrieval | Context Precision | Whether higher-ranked retrieved contexts are useful for the reference answer. |
+| Retrieval | Context Recall | Whether retrieved contexts contain the information needed by the reference answer. |
+| Generation | Faithfulness | Whether generated claims are supported by retrieved contexts. |
+| Generation | Answer Relevancy | Whether the answer addresses the user question. |
+
+RAGAS scores are in the `[0, 1]` range. Reports include the valid sample count for
+each aggregate. A metric or provider failure remains `null` with a structured
+error; it is never silently converted to zero.
+
+Latency is traced around the existing pipeline components without copying or
+changing `RAGPipeline.ask()`:
+
+- `embedding`: query embedding time;
+- `retrieval`: retriever time excluding embedding, so stages are not double
+  counted;
+- `generation`: generator call time;
+- `total`: complete `pipeline.ask()` wall-clock time, including prompt building,
+  reranking, and source normalization not listed as separate stages.
+
+The report uses NumPy percentiles. p50 describes typical user experience; p95
+highlights slow-request bottlenecks. Four stages are not forced to sum to total.
+
+### Evaluation configuration
+
+| Variable | Default | Meaning |
+| - | - | - |
+| `EVALUATION_DATASET_PATH` | `evaluation/dataset/eval_dataset.json` | Offline dataset path. |
+| `EVALUATION_JSON_REPORT_PATH` | `reports/evaluation_report.json` | Structured report path. |
+| `EVALUATION_MARKDOWN_REPORT_PATH` | `reports/evaluation_report.md` | Human-readable report path. |
+| `EVALUATION_TOP_K` | `5` | Final contexts requested from the existing pipeline. |
+| `EVALUATION_RAGAS_MODEL` | `gpt-4o-mini` | RAGAS evaluator LLM. |
+| `EVALUATION_RAGAS_EMBEDDING_MODEL` | `text-embedding-3-small` | RAGAS answer-relevancy embeddings. |
+| `EVALUATION_RAGAS_TIMEOUT` | `60` | Evaluator request timeout in seconds. |
+| `EVALUATION_FAITHFULNESS_THRESHOLD` | `0.7` | Failed-example hallucination threshold. |
+| `EVALUATION_CONTEXT_RECALL_THRESHOLD` | `0.7` | Failed-example insufficient-context threshold. |
+
+RAGAS is loaded lazily. The adapter supports the current collections API and a
+legacy `evaluate()` fallback. It also contains a narrow in-memory compatibility
+shim for the known RAGAS 0.4.3 import of a removed VertexAI type; it does not
+modify installed packages or downgrade LangChain. If RAGAS or its evaluator
+configuration is unavailable, pipeline, retrieval, and latency results are still
+written with an explicit `unavailable` or `partial` status.
+
+Generated reports contain aggregate metrics, bounded failed-answer previews, and
+source identifiers. They do not persist full retrieved contexts, credentials, or
+raw provider exception payloads.
 
 ## Environment Variables
 
