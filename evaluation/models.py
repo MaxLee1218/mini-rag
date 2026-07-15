@@ -50,3 +50,4 @@ class EvaluationRecord:
     abstention_correct: bool | None
     ragas: RagasScores = field(default_factory=RagasScores)
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)

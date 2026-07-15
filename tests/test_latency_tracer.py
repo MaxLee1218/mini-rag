@@ -198,6 +198,27 @@ def test_trace_restores_components_when_pipeline_raises():
     assert error_info.value.latency.retrieval is not None
     assert error_info.value.latency.generation is None
     assert error_info.value.latency.total is not None
+    assert error_info.value.warnings == []
+
+
+def test_trace_error_preserves_warnings_discovered_before_pipeline_failure():
+    class RaisingCustomPipeline(FakeCustomPipeline):
+        def ask(self, question, top_k=None):
+            raise self.failure
+
+        def __init__(self):
+            super().__init__()
+            self.failure = RuntimeError("pipeline failed")
+
+    pipeline = RaisingCustomPipeline()
+
+    with pytest.raises(PipelineTraceError) as error_info:
+        trace_pipeline_call(pipeline, "question")
+
+    assert error_info.value.original_exception is pipeline.failure
+    assert error_info.value.warnings == [
+        "embedding timer unavailable for custom retriever"
+    ]
 
 
 def test_trace_discovers_hybrid_dense_embedder():

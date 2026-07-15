@@ -37,7 +37,7 @@ class EvaluationRunner:
         records: list[EvaluationRecord] = []
         for sample in samples:
             try:
-                result, latency, _warnings = self.trace(
+                result, latency, warnings = self.trace(
                     self.pipeline,
                     sample.question,
                     top_k=self.top_k,
@@ -58,10 +58,11 @@ class EvaluationRunner:
                         latency=latency,
                         retrieval_hit=_retrieval_hit(sample, contexts),
                         abstention_correct=_abstention_correct(sample, answer),
+                        warnings=list(warnings),
                     )
                 )
             except Exception as error:
-                original_error, latency = _error_details(error)
+                original_error, latency, warnings = _error_details(error)
                 records.append(
                     EvaluationRecord(
                         sample=sample,
@@ -73,6 +74,7 @@ class EvaluationRunner:
                         retrieval_hit=None,
                         abstention_correct=None,
                         errors=[_bounded_pipeline_error(original_error)],
+                        warnings=warnings,
                     )
                 )
         return records
@@ -140,10 +142,10 @@ def _normalize_text(value: str) -> str:
 
 def _error_details(
     error: Exception,
-) -> tuple[Exception, LatencyObservation]:
+) -> tuple[Exception, LatencyObservation, list[str]]:
     if isinstance(error, PipelineTraceError):
-        return error.original_exception, error.latency
-    return error, _NULL_LATENCY
+        return error.original_exception, error.latency, list(error.warnings)
+    return error, _NULL_LATENCY, []
 
 
 def _bounded_pipeline_error(error: Exception) -> str:

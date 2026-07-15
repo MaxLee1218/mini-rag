@@ -83,6 +83,14 @@ def direct_trace(pipeline, question, *, top_k=None):
     return pipeline.ask(question, top_k=top_k), SUCCESS_LATENCY, []
 
 
+def warning_trace(pipeline, question, *, top_k=None):
+    return (
+        pipeline.ask(question, top_k=top_k),
+        SUCCESS_LATENCY,
+        ["embedding timer unavailable for custom retriever"],
+    )
+
+
 def test_runner_calls_ask_once_and_preserves_sources():
     pipeline = FakePipeline(successful_result())
 
@@ -97,6 +105,15 @@ def test_runner_calls_ask_once_and_preserves_sources():
     assert records[0].sources == ["rag_notes.txt"]
     assert records[0].retrieval_hit is True
     assert records[0].latency == SUCCESS_LATENCY
+
+
+def test_runner_preserves_successful_trace_warnings():
+    result = EvaluationRunner(
+        FakePipeline(successful_result()),
+        trace=warning_trace,
+    ).evaluate([answerable_sample()])[0]
+
+    assert result.warnings == ["embedding timer unavailable for custom retriever"]
 
 
 def test_retrieval_match_casefolds_and_collapses_whitespace():
@@ -190,7 +207,11 @@ def test_runner_preserves_partial_latency_and_original_trace_error():
     partial = LatencyObservation(2.0, 4.0, None, 8.0)
 
     def failing_trace(pipeline, question, *, top_k=None):
-        raise PipelineTraceError(ValueError("bad provider"), partial)
+        raise PipelineTraceError(
+            ValueError("bad provider"),
+            partial,
+            warnings=["embedding timer unavailable for custom retriever"],
+        )
 
     result = EvaluationRunner(FakePipeline([]), trace=failing_trace).evaluate(
         [answerable_sample()]
@@ -198,6 +219,7 @@ def test_runner_preserves_partial_latency_and_original_trace_error():
 
     assert result.latency == partial
     assert result.errors == ["pipeline: ValueError: bad provider"]
+    assert result.warnings == ["embedding timer unavailable for custom retriever"]
 
 
 def test_runner_bounds_and_flattens_pipeline_error_messages():

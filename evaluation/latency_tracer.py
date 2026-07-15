@@ -20,10 +20,12 @@ class PipelineTraceError(RuntimeError):
         self,
         original_exception: Exception,
         latency: LatencyObservation,
+        warnings: list[str] | None = None,
     ) -> None:
         super().__init__("pipeline call failed while tracing latency")
         self.original_exception = original_exception
         self.latency = latency
+        self.warnings = list(warnings or [])
 
 
 @dataclass
@@ -153,7 +155,7 @@ def trace_pipeline_call(
                 result = pipeline.ask(question, top_k=top_k)
         except Exception as error:
             observation = elapsed.observation(clock_ns() - total_started_ns)
-            raise PipelineTraceError(error, observation) from error
+            raise PipelineTraceError(error, observation, warnings) from error
 
         observation = elapsed.observation(clock_ns() - total_started_ns)
         return result, observation, warnings
