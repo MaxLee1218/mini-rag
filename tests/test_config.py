@@ -105,10 +105,10 @@ def test_config_uses_defaults_without_api_keys(monkeypatch):
         config.PROJECT_ROOT / "evaluation/dataset/eval_dataset.json"
     )
     assert config.EVALUATION_JSON_REPORT_PATH == (
-        config.PROJECT_ROOT / "evaluation/reports/evaluation_report.json"
+        config.PROJECT_ROOT / "reports/evaluation_report.json"
     )
     assert config.EVALUATION_MARKDOWN_REPORT_PATH == (
-        config.PROJECT_ROOT / "evaluation/reports/evaluation_report.md"
+        config.PROJECT_ROOT / "reports/evaluation_report.md"
     )
     assert config.EVALUATION_TOP_K == 5
     assert config.EVALUATION_RAGAS_MODEL == "gpt-4o-mini"

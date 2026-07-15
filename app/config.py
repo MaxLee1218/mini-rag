@@ -225,10 +225,10 @@ EVALUATION_DATASET_PATH = _parse_project_path_env(
     "EVALUATION_DATASET_PATH", "evaluation/dataset/eval_dataset.json"
 )
 EVALUATION_JSON_REPORT_PATH = _parse_project_path_env(
-    "EVALUATION_JSON_REPORT_PATH", "evaluation/reports/evaluation_report.json"
+    "EVALUATION_JSON_REPORT_PATH", "reports/evaluation_report.json"
 )
 EVALUATION_MARKDOWN_REPORT_PATH = _parse_project_path_env(
-    "EVALUATION_MARKDOWN_REPORT_PATH", "evaluation/reports/evaluation_report.md"
+    "EVALUATION_MARKDOWN_REPORT_PATH", "reports/evaluation_report.md"
 )
 EVALUATION_TOP_K = _parse_positive_int_env("EVALUATION_TOP_K", 5)
 EVALUATION_RAGAS_MODEL = _parse_nonblank_env(
