@@ -206,7 +206,7 @@ def _evaluate_ragas(
             },
             errors=[
                 "RAGAS configuration unavailable: "
-                f"{type(error).__name__}; configure OPENAI_API_KEY"
+                f"{type(error).__name__}; configure the selected evaluator provider"
             ],
         )
     return RagasEvaluator(ragas_config).evaluate(records)
@@ -234,6 +234,7 @@ def _run_metadata(
             ),
             "reranker_enabled": config.RERANKER_ENABLED,
             "generator_model": config.DEEPSEEK_MODEL,
+            "ragas_provider": config.EVALUATION_RAGAS_PROVIDER,
             "ragas_model": ragas_summary.model,
             "ragas_embedding_model": ragas_summary.embedding_model,
         },

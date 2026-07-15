@@ -15,8 +15,10 @@ from evaluation.models import (
 from evaluation.ragas_evaluator import (
     CollectionsBindings,
     LegacyBindings,
+    LocalRagasEmbeddings,
     RagasConfig,
     RagasEvaluator,
+    default_ragas_config,
     _import_ragas_module,
 )
 
@@ -55,10 +57,54 @@ class FakeLegacyResult:
 def _config() -> RagasConfig:
     return RagasConfig(
         api_key="test-key",
+        provider="deepseek",
+        base_url="https://deepseek.test",
         model="test-judge",
         embedding_model="test-embedding",
         timeout_seconds=5.0,
     )
+
+
+class FakeEmbedder:
+    def embed_query(self, text: str) -> object:
+        assert text == "one"
+        return SimpleNamespace(tolist=lambda: [1.0, 2.0])
+
+    def embed_texts(self, texts: list[str]) -> object:
+        assert texts == ["one", "two"]
+        return SimpleNamespace(tolist=lambda: [[1.0], [2.0]])
+
+
+def test_local_ragas_embeddings_support_sync_and_async_interfaces() -> None:
+    embeddings = LocalRagasEmbeddings(FakeEmbedder())
+
+    assert embeddings.embed_text("one") == [1.0, 2.0]
+    assert embeddings.embed_texts(["one", "two"]) == [[1.0], [2.0]]
+
+    import asyncio
+
+    assert asyncio.run(embeddings.aembed_text("one")) == [1.0, 2.0]
+    assert asyncio.run(embeddings.aembed_texts(["one", "two"])) == [
+        [1.0],
+        [2.0],
+    ]
+
+
+def test_default_ragas_config_uses_deepseek_credentials(monkeypatch) -> None:
+    import app.config as app_config
+
+    monkeypatch.setattr(app_config, "EVALUATION_RAGAS_PROVIDER", "deepseek")
+    monkeypatch.setattr(app_config, "EVALUATION_RAGAS_MODEL", "deepseek-judge")
+    monkeypatch.setattr(app_config, "EVALUATION_RAGAS_EMBEDDING_MODEL", "local")
+    monkeypatch.setattr(app_config, "EVALUATION_RAGAS_TIMEOUT", 9.0)
+    monkeypatch.setattr(app_config, "DEEPSEEK_BASE_URL", "https://deepseek.test")
+    monkeypatch.setattr(app_config, "require_deepseek_api_key", lambda: "ds-key")
+
+    config = default_ragas_config()
+
+    assert config.provider == "deepseek"
+    assert config.api_key == "ds-key"
+    assert config.base_url == "https://deepseek.test"
 
 
 def _record(question: str = "q") -> EvaluationRecord:

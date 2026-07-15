@@ -296,7 +296,7 @@ evaluation dataset
 ### Run the evaluation
 
 Activate the project environment, install dependencies, ingest the current
-documents, and configure both provider keys in `.env`:
+documents, and configure `DEEPSEEK_API_KEY` in `.env`:
 
 ```bash
 source .venv/bin/activate
@@ -305,9 +305,11 @@ python scripts/ingest.py
 python eval/run_eval.py
 ```
 
-The pipeline itself uses the existing DeepSeek configuration. RAGAS uses the
-configured OpenAI evaluator model and embedding model. Unit tests never make
-provider calls; `python eval/run_eval.py` is the explicit live-provider command.
+The pipeline and default RAGAS judge both use the existing DeepSeek
+OpenAI-compatible endpoint. Answer Relevancy uses the project's local
+SentenceTransformer because DeepSeek does not expose an embedding API. Unit
+tests never make provider calls; `python eval/run_eval.py` is the explicit
+live-provider command.
 
 Optional path and retrieval overrides are available without changing source:
 
@@ -379,8 +381,9 @@ highlights slow-request bottlenecks. Four stages are not forced to sum to total.
 | `EVALUATION_JSON_REPORT_PATH` | `reports/evaluation_report.json` | Structured report path. |
 | `EVALUATION_MARKDOWN_REPORT_PATH` | `reports/evaluation_report.md` | Human-readable report path. |
 | `EVALUATION_TOP_K` | `5` | Final contexts requested from the existing pipeline. |
-| `EVALUATION_RAGAS_MODEL` | `gpt-4o-mini` | RAGAS evaluator LLM. |
-| `EVALUATION_RAGAS_EMBEDDING_MODEL` | `text-embedding-3-small` | RAGAS answer-relevancy embeddings. |
+| `EVALUATION_RAGAS_PROVIDER` | `deepseek` | Evaluator provider (`deepseek` or `openai`). |
+| `EVALUATION_RAGAS_MODEL` | `deepseek-v4-flash` | RAGAS evaluator LLM; follows the selected provider when unset. |
+| `EVALUATION_RAGAS_EMBEDDING_MODEL` | `local` | RAGAS answer-relevancy embeddings; uses the project embedder for DeepSeek. |
 | `EVALUATION_RAGAS_TIMEOUT` | `60` | Evaluator request timeout in seconds. |
 | `EVALUATION_FAITHFULNESS_THRESHOLD` | `0.7` | Failed-example hallucination threshold. |
 | `EVALUATION_CONTEXT_RECALL_THRESHOLD` | `0.7` | Failed-example insufficient-context threshold. |
@@ -395,6 +398,31 @@ written with an explicit `unavailable` or `partial` status.
 Generated reports contain aggregate metrics, bounded failed-answer previews, and
 source identifiers. They do not persist full retrieved contexts, credentials, or
 raw provider exception payloads.
+
+### Real evaluation snapshot
+
+The checked-in reports were generated on 2026-07-15 with 10 samples, RAGAS
+0.4.3, `deepseek-v4-flash`, the local multilingual MiniLM embedder, and `top_k=5`.
+All four RAGAS metrics contain 10 valid scores.
+
+| Metric | Score |
+| - | -: |
+| Retrieval Hit Rate | 1.0000 |
+| Abstention Accuracy | 1.0000 |
+| Faithfulness | 0.8000 |
+| Answer Relevancy | 0.6103 |
+| Context Precision | 0.8167 |
+| Context Recall | 0.9000 |
+
+| Stage | p50 (ms) | p95 (ms) |
+| - | -: | -: |
+| Embedding | 16.074 | 8592.449 |
+| Retrieval | 3.788 | 5.316 |
+| Generation | 1029.842 | 1193.727 |
+| Total | 1066.110 | 12580.570 |
+
+The high embedding and total p95 values include cold-start model loading in this
+offline run. See `reports/evaluation_report.md` for the generated report.
 
 ## Environment Variables
 

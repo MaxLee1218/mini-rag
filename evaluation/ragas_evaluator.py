@@ -29,6 +29,8 @@ class RagasConfig:
     """Provider configuration used only by the offline RAGAS evaluator."""
 
     api_key: str
+    provider: str
+    base_url: str | None
     model: str
     embedding_model: str
     timeout_seconds: float
@@ -73,6 +75,55 @@ class RagasEvaluationSummary:
 
 Bindings = CollectionsBindings | LegacyBindings
 BindingsLoader = Callable[[RagasConfig], Bindings]
+
+
+class LocalRagasEmbeddings:
+    """Adapt the project's local embedder to RAGAS' modern embedding contract."""
+
+    def __init__(self, embedder: Any) -> None:
+        self._embedder = embedder
+
+    def embed_text(self, text: str, **kwargs: Any) -> list[float]:
+        """Embed one text synchronously using the project embedder."""
+        del kwargs
+        return list(self._embedder.embed_query(text).tolist())
+
+    def embed_texts(
+        self,
+        texts: list[str],
+        **kwargs: Any,
+    ) -> list[list[float]]:
+        """Embed a text batch synchronously using one model invocation."""
+        del kwargs
+        return list(self._embedder.embed_texts(texts).tolist())
+
+    async def aembed_text(self, text: str, **kwargs: Any) -> list[float]:
+        """Expose RAGAS' async contract for the synchronous local model."""
+        return self.embed_text(text, **kwargs)
+
+    async def aembed_texts(
+        self,
+        texts: list[str],
+        **kwargs: Any,
+    ) -> list[list[float]]:
+        """Expose RAGAS' async batch contract for the synchronous local model."""
+        return self.embed_texts(texts, **kwargs)
+
+    def embed_query(self, text: str) -> list[float]:
+        """Expose the legacy LangChain single-query embedding contract."""
+        return self.embed_text(text)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Expose the legacy LangChain document embedding contract."""
+        return self.embed_texts(texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        """Expose the legacy asynchronous single-query contract."""
+        return await self.aembed_text(text)
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Expose the legacy asynchronous document embedding contract."""
+        return await self.aembed_texts(texts)
 
 
 class RagasEvaluator:
@@ -201,14 +252,25 @@ class RagasEvaluator:
 def default_ragas_config() -> RagasConfig:
     """Load RAGAS evaluator configuration through the project config module."""
     from app.config import (
+        DEEPSEEK_BASE_URL,
+        EVALUATION_RAGAS_PROVIDER,
         EVALUATION_RAGAS_EMBEDDING_MODEL,
         EVALUATION_RAGAS_MODEL,
         EVALUATION_RAGAS_TIMEOUT,
+        require_deepseek_api_key,
         require_openai_api_key,
     )
 
+    if EVALUATION_RAGAS_PROVIDER == "deepseek":
+        api_key = require_deepseek_api_key()
+        base_url: str | None = DEEPSEEK_BASE_URL
+    else:
+        api_key = require_openai_api_key()
+        base_url = None
     return RagasConfig(
-        api_key=require_openai_api_key(),
+        api_key=api_key,
+        provider=EVALUATION_RAGAS_PROVIDER,
+        base_url=base_url,
         model=EVALUATION_RAGAS_MODEL,
         embedding_model=EVALUATION_RAGAS_EMBEDDING_MODEL,
         timeout_seconds=EVALUATION_RAGAS_TIMEOUT,
@@ -224,23 +286,23 @@ def load_ragas_bindings(config: RagasConfig | None = None) -> Bindings:
     try:
         metrics_module = importlib.import_module("ragas.metrics.collections")
         llms_module = importlib.import_module("ragas.llms")
-        embeddings_module = importlib.import_module("ragas.embeddings.base")
         openai_module = importlib.import_module("openai")
-        client = openai_module.AsyncOpenAI(
+        client_kwargs: dict[str, Any] = dict(
             api_key=resolved_config.api_key,
             timeout=resolved_config.timeout_seconds,
         )
+        if resolved_config.base_url is not None:
+            client_kwargs["base_url"] = resolved_config.base_url
+        client = openai_module.AsyncOpenAI(**client_kwargs)
+        # DeepSeek exposes an OpenAI-compatible API. Using RAGAS' OpenAI
+        # adapter selects JSON structured output while the client base URL
+        # still routes every request to DeepSeek.
         llm = llms_module.llm_factory(
             resolved_config.model,
             provider="openai",
             client=client,
         )
-        embeddings = embeddings_module.embedding_factory(
-            "openai",
-            model=resolved_config.embedding_model,
-            client=client,
-            interface="modern",
-        )
+        embeddings = _load_collections_embeddings(resolved_config, client)
         return CollectionsBindings(
             version=version,
             scorers={
@@ -286,16 +348,22 @@ def _load_legacy_bindings(config: RagasConfig, version: str) -> LegacyBindings:
     datasets_module = importlib.import_module("datasets")
     langchain_openai = importlib.import_module("langchain_openai")
     ragas_module = importlib.import_module("ragas")
-    llm = langchain_openai.ChatOpenAI(
+    client_kwargs: dict[str, Any] = dict(
         api_key=config.api_key,
         model=config.model,
         timeout=config.timeout_seconds,
     )
-    embeddings = langchain_openai.OpenAIEmbeddings(
-        api_key=config.api_key,
-        model=config.embedding_model,
-        timeout=config.timeout_seconds,
-    )
+    if config.base_url is not None:
+        client_kwargs["base_url"] = config.base_url
+    llm = langchain_openai.ChatOpenAI(**client_kwargs)
+    if config.provider == "deepseek":
+        embeddings = _local_embeddings(config.embedding_model)
+    else:
+        embeddings = langchain_openai.OpenAIEmbeddings(
+            api_key=config.api_key,
+            model=config.embedding_model,
+            timeout=config.timeout_seconds,
+        )
     return LegacyBindings(
         version=version,
         evaluate=ragas_module.evaluate,
@@ -304,6 +372,45 @@ def _load_legacy_bindings(config: RagasConfig, version: str) -> LegacyBindings:
         llm=llm,
         embeddings=embeddings,
     )
+
+
+def _load_collections_embeddings(config: RagasConfig, client: Any) -> Any:
+    """Create provider embeddings without sending unsupported calls to DeepSeek."""
+    if config.provider == "deepseek":
+        return _modern_local_embeddings(config.embedding_model)
+    embeddings_module = importlib.import_module("ragas.embeddings.base")
+    return embeddings_module.embedding_factory(
+        "openai",
+        model=config.embedding_model,
+        client=client,
+        interface="modern",
+    )
+
+
+def _local_embeddings(model_name: str) -> LocalRagasEmbeddings:
+    """Construct the lazily loaded project embedding adapter."""
+    from app.embeddings import Embedder
+
+    selected_model = None if model_name == "local" else model_name
+    return LocalRagasEmbeddings(Embedder(model_name=selected_model))
+
+
+def _modern_local_embeddings(model_name: str) -> LocalRagasEmbeddings:
+    """Wrap local embeddings in RAGAS' lazily imported nominal base type."""
+    embeddings_module = importlib.import_module("ragas.embeddings.base")
+    base_class = embeddings_module.BaseRagasEmbedding
+
+    class ModernLocalRagasEmbeddings(LocalRagasEmbeddings, base_class):
+        """Runtime adapter satisfying RAGAS collections' nominal type check."""
+
+        def __init__(self, embedder: Any) -> None:
+            base_class.__init__(self)
+            LocalRagasEmbeddings.__init__(self, embedder)
+
+    from app.embeddings import Embedder
+
+    selected_model = None if model_name == "local" else model_name
+    return ModernLocalRagasEmbeddings(Embedder(model_name=selected_model))
 
 
 def _metric_inputs(record: EvaluationRecord) -> dict[str, dict[str, Any]]:
@@ -401,7 +508,11 @@ def _call_legacy_evaluate(
         for parameter in signature.parameters.values()
     )
     if not accepts_kwargs:
-        kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
+        kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key in signature.parameters
+        }
     return bindings.evaluate(dataset, **kwargs)
 
 

@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "status": "completed",
+  "generated_at": "2026-07-15T21:12:50+08:00",
+  "dataset": {
+    "samples": 10,
+    "path": "evaluation/dataset/eval_dataset.json",
+    "sha256": "3fe4fc2006c461aebd1a8c96a7287d02b03fcfab32ae622055b42d8c178b2a72"
+  },
+  "configuration": {
+    "top_k": 5,
+    "chunk_mode": "standard",
+    "retrieval_strategy": "hybrid",
+    "reranker_enabled": true,
+    "generator_model": "deepseek-v4-flash",
+    "ragas_provider": "deepseek",
+    "ragas_model": "deepseek-v4-flash",
+    "ragas_embedding_model": "local"
+  },
+  "thresholds": {
+    "faithfulness": 0.7,
+    "context_recall": 0.7
+  },
+  "retrieval": {
+    "retrieval_hit_rate": 1.0,
+    "retrieval_hits": 8,
+    "retrieval_evaluable_samples": 8,
+    "abstention_accuracy": 1.0,
+    "correct_abstentions": 2,
+    "abstention_samples": 2
+  },
+  "ragas": {
+    "status": "completed",
+    "version": "0.4.3",
+    "model": "deepseek-v4-flash",
+    "embedding_model": "local",
+    "metrics": {
+      "faithfulness": {
+        "score": 0.8,
+        "count": 10
+      },
+      "answer_relevancy": {
+        "score": 0.610277,
+        "count": 10
+      },
+      "context_precision": {
+        "score": 0.816667,
+        "count": 10
+      },
+      "context_recall": {
+        "score": 0.9,
+        "count": 10
+      }
+    },
+    "warnings": [],
+    "errors": []
+  },
+  "latency": {
+    "embedding": {
+      "p50": 16.074,
+      "p95": 8592.449,
+      "count": 10
+    },
+    "retrieval": {
+      "p50": 3.788,
+      "p95": 5.316,
+      "count": 10
+    },
+    "generation": {
+      "p50": 1029.842,
+      "p95": 1193.727,
+      "count": 10
+    },
+    "total": {
+      "p50": 1066.11,
+      "p95": 12580.57,
+      "count": 10
+    }
+  },
+  "failed_examples": [],
+  "warnings": [],
+  "errors": []
+}

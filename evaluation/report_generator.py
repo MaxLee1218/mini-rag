@@ -136,7 +136,8 @@ def _failed_example(
     if record.retrieval_hit is False:
         reasons.append("retrieval miss")
     if (
-        record.ragas.faithfulness is not None
+        not (record.sample.should_abstain and record.abstention_correct is True)
+        and record.ragas.faithfulness is not None
         and record.ragas.faithfulness < faithfulness_threshold
     ):
         reasons.append("hallucination")

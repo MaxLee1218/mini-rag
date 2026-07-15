@@ -43,6 +43,7 @@ CONFIG_ENV_KEYS = (
     "EVALUATION_JSON_REPORT_PATH",
     "EVALUATION_MARKDOWN_REPORT_PATH",
     "EVALUATION_TOP_K",
+    "EVALUATION_RAGAS_PROVIDER",
     "EVALUATION_RAGAS_MODEL",
     "EVALUATION_RAGAS_EMBEDDING_MODEL",
     "EVALUATION_RAGAS_TIMEOUT",
@@ -111,8 +112,9 @@ def test_config_uses_defaults_without_api_keys(monkeypatch):
         config.PROJECT_ROOT / "reports/evaluation_report.md"
     )
     assert config.EVALUATION_TOP_K == 5
-    assert config.EVALUATION_RAGAS_MODEL == "gpt-4o-mini"
-    assert config.EVALUATION_RAGAS_EMBEDDING_MODEL == "text-embedding-3-small"
+    assert config.EVALUATION_RAGAS_PROVIDER == "deepseek"
+    assert config.EVALUATION_RAGAS_MODEL == "deepseek-v4-flash"
+    assert config.EVALUATION_RAGAS_EMBEDDING_MODEL == "local"
     assert config.EVALUATION_RAGAS_TIMEOUT == 60.0
     assert config.EVALUATION_FAITHFULNESS_THRESHOLD == 0.7
     assert config.EVALUATION_CONTEXT_RECALL_THRESHOLD == 0.7
@@ -127,6 +129,7 @@ def test_evaluation_config_reads_environment_overrides(monkeypatch):
         EVALUATION_JSON_REPORT_PATH="artifacts/eval.json",
         EVALUATION_MARKDOWN_REPORT_PATH="artifacts/eval.md",
         EVALUATION_TOP_K="7",
+        EVALUATION_RAGAS_PROVIDER="openai",
         EVALUATION_RAGAS_MODEL="evaluation-llm",
         EVALUATION_RAGAS_EMBEDDING_MODEL="evaluation-embedding",
         EVALUATION_RAGAS_TIMEOUT="12.5",
@@ -140,6 +143,7 @@ def test_evaluation_config_reads_environment_overrides(monkeypatch):
     assert config.EVALUATION_JSON_REPORT_PATH == config.PROJECT_ROOT / "artifacts/eval.json"
     assert config.EVALUATION_MARKDOWN_REPORT_PATH == config.PROJECT_ROOT / "artifacts/eval.md"
     assert config.EVALUATION_TOP_K == 7
+    assert config.EVALUATION_RAGAS_PROVIDER == "openai"
     assert config.EVALUATION_RAGAS_MODEL == "evaluation-llm"
     assert config.EVALUATION_RAGAS_EMBEDDING_MODEL == "evaluation-embedding"
     assert config.EVALUATION_RAGAS_TIMEOUT == 12.5
@@ -154,6 +158,11 @@ def test_evaluation_config_reads_environment_overrides(monkeypatch):
     [
         ("EVALUATION_DATASET_PATH", " ", "EVALUATION_DATASET_PATH must not be blank"),
         ("EVALUATION_TOP_K", "0", "EVALUATION_TOP_K must be a positive integer"),
+        (
+            "EVALUATION_RAGAS_PROVIDER",
+            "unknown",
+            "EVALUATION_RAGAS_PROVIDER must be one of: deepseek, openai",
+        ),
         ("EVALUATION_RAGAS_MODEL", " ", "EVALUATION_RAGAS_MODEL must not be blank"),
         (
             "EVALUATION_RAGAS_EMBEDDING_MODEL",

@@ -154,6 +154,20 @@ def test_empty_context_is_insufficient_and_incorrect_abstention_is_hallucination
     assert report["failed_examples"][1]["reasons"] == ["hallucination"]
 
 
+def test_correct_abstention_is_not_failed_by_ragas_generation_thresholds() -> None:
+    correct_abstention = _record(
+        hit=None,
+        abstention=True,
+        faithfulness=0.0,
+        context_recall=0.0,
+        answer="Not found in knowledge base.",
+    )
+
+    report = _build([correct_abstention])
+
+    assert report["failed_examples"] == []
+
+
 def test_pipeline_error_is_reported_without_private_context_or_unbounded_answer() -> None:
     record = _record(
         answer="x" * 200,

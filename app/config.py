@@ -231,11 +231,16 @@ EVALUATION_MARKDOWN_REPORT_PATH = _parse_project_path_env(
     "EVALUATION_MARKDOWN_REPORT_PATH", "reports/evaluation_report.md"
 )
 EVALUATION_TOP_K = _parse_positive_int_env("EVALUATION_TOP_K", 5)
+EVALUATION_RAGAS_PROVIDER = _parse_choice_env(
+    "EVALUATION_RAGAS_PROVIDER", "deepseek", ("deepseek", "openai")
+)
 EVALUATION_RAGAS_MODEL = _parse_nonblank_env(
-    "EVALUATION_RAGAS_MODEL", "gpt-4o-mini"
+    "EVALUATION_RAGAS_MODEL",
+    DEEPSEEK_MODEL if EVALUATION_RAGAS_PROVIDER == "deepseek" else OPENAI_MODEL,
 )
 EVALUATION_RAGAS_EMBEDDING_MODEL = _parse_nonblank_env(
-    "EVALUATION_RAGAS_EMBEDDING_MODEL", "text-embedding-3-small"
+    "EVALUATION_RAGAS_EMBEDDING_MODEL",
+    "local" if EVALUATION_RAGAS_PROVIDER == "deepseek" else "text-embedding-3-small",
 )
 EVALUATION_RAGAS_TIMEOUT = _parse_finite_positive_float_env(
     "EVALUATION_RAGAS_TIMEOUT", 60.0
