@@ -39,6 +39,17 @@ CONFIG_ENV_KEYS = (
     "REDIS_URL",
     "REDIS_CONNECT_TIMEOUT_SECONDS",
     "REDIS_SOCKET_TIMEOUT_SECONDS",
+    "EVALUATION_DATASET_PATH",
+    "EVALUATION_JSON_REPORT_PATH",
+    "EVALUATION_MARKDOWN_REPORT_PATH",
+    "EVALUATION_TOP_K",
+    "EVALUATION_RAGAS_MODEL",
+    "EVALUATION_RAGAS_EMBEDDING_MODEL",
+    "EVALUATION_RAGAS_TIMEOUT",
+    "EVALUATION_FAITHFULNESS_THRESHOLD",
+    "EVALUATION_CONTEXT_RECALL_THRESHOLD",
+    "EVALUATION_QUESTION_PREVIEW_CHARS",
+    "EVALUATION_ANSWER_PREVIEW_CHARS",
 )
 
 
@@ -90,6 +101,92 @@ def test_config_uses_defaults_without_api_keys(monkeypatch):
     assert config.REDIS_URL == "redis://localhost:6379/0"
     assert config.REDIS_CONNECT_TIMEOUT_SECONDS == 0.2
     assert config.REDIS_SOCKET_TIMEOUT_SECONDS == 0.2
+    assert config.EVALUATION_DATASET_PATH == (
+        config.PROJECT_ROOT / "evaluation/dataset/eval_dataset.json"
+    )
+    assert config.EVALUATION_JSON_REPORT_PATH == (
+        config.PROJECT_ROOT / "evaluation/reports/evaluation_report.json"
+    )
+    assert config.EVALUATION_MARKDOWN_REPORT_PATH == (
+        config.PROJECT_ROOT / "evaluation/reports/evaluation_report.md"
+    )
+    assert config.EVALUATION_TOP_K == 5
+    assert config.EVALUATION_RAGAS_MODEL == "gpt-4o-mini"
+    assert config.EVALUATION_RAGAS_EMBEDDING_MODEL == "text-embedding-3-small"
+    assert config.EVALUATION_RAGAS_TIMEOUT == 60.0
+    assert config.EVALUATION_FAITHFULNESS_THRESHOLD == 0.7
+    assert config.EVALUATION_CONTEXT_RECALL_THRESHOLD == 0.7
+    assert config.EVALUATION_QUESTION_PREVIEW_CHARS == 300
+    assert config.EVALUATION_ANSWER_PREVIEW_CHARS == 800
+
+
+def test_evaluation_config_reads_environment_overrides(monkeypatch):
+    config = reload_config(
+        monkeypatch,
+        EVALUATION_DATASET_PATH="fixtures/eval.json",
+        EVALUATION_JSON_REPORT_PATH="artifacts/eval.json",
+        EVALUATION_MARKDOWN_REPORT_PATH="artifacts/eval.md",
+        EVALUATION_TOP_K="7",
+        EVALUATION_RAGAS_MODEL="evaluation-llm",
+        EVALUATION_RAGAS_EMBEDDING_MODEL="evaluation-embedding",
+        EVALUATION_RAGAS_TIMEOUT="12.5",
+        EVALUATION_FAITHFULNESS_THRESHOLD="0.8",
+        EVALUATION_CONTEXT_RECALL_THRESHOLD="0.9",
+        EVALUATION_QUESTION_PREVIEW_CHARS="120",
+        EVALUATION_ANSWER_PREVIEW_CHARS="450",
+    )
+
+    assert config.EVALUATION_DATASET_PATH == config.PROJECT_ROOT / "fixtures/eval.json"
+    assert config.EVALUATION_JSON_REPORT_PATH == config.PROJECT_ROOT / "artifacts/eval.json"
+    assert config.EVALUATION_MARKDOWN_REPORT_PATH == config.PROJECT_ROOT / "artifacts/eval.md"
+    assert config.EVALUATION_TOP_K == 7
+    assert config.EVALUATION_RAGAS_MODEL == "evaluation-llm"
+    assert config.EVALUATION_RAGAS_EMBEDDING_MODEL == "evaluation-embedding"
+    assert config.EVALUATION_RAGAS_TIMEOUT == 12.5
+    assert config.EVALUATION_FAITHFULNESS_THRESHOLD == 0.8
+    assert config.EVALUATION_CONTEXT_RECALL_THRESHOLD == 0.9
+    assert config.EVALUATION_QUESTION_PREVIEW_CHARS == 120
+    assert config.EVALUATION_ANSWER_PREVIEW_CHARS == 450
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("EVALUATION_DATASET_PATH", " ", "EVALUATION_DATASET_PATH must not be blank"),
+        ("EVALUATION_TOP_K", "0", "EVALUATION_TOP_K must be a positive integer"),
+        ("EVALUATION_RAGAS_MODEL", " ", "EVALUATION_RAGAS_MODEL must not be blank"),
+        (
+            "EVALUATION_RAGAS_EMBEDDING_MODEL",
+            " ",
+            "EVALUATION_RAGAS_EMBEDDING_MODEL must not be blank",
+        ),
+        ("EVALUATION_RAGAS_TIMEOUT", "0", "EVALUATION_RAGAS_TIMEOUT must be positive"),
+        ("EVALUATION_RAGAS_TIMEOUT", "nan", "EVALUATION_RAGAS_TIMEOUT must be positive"),
+        (
+            "EVALUATION_FAITHFULNESS_THRESHOLD",
+            "1.1",
+            "EVALUATION_FAITHFULNESS_THRESHOLD must be between 0 and 1",
+        ),
+        (
+            "EVALUATION_CONTEXT_RECALL_THRESHOLD",
+            "-0.1",
+            "EVALUATION_CONTEXT_RECALL_THRESHOLD must be between 0 and 1",
+        ),
+        (
+            "EVALUATION_QUESTION_PREVIEW_CHARS",
+            "0",
+            "EVALUATION_QUESTION_PREVIEW_CHARS must be a positive integer",
+        ),
+        (
+            "EVALUATION_ANSWER_PREVIEW_CHARS",
+            "nope",
+            "EVALUATION_ANSWER_PREVIEW_CHARS must be a positive integer",
+        ),
+    ],
+)
+def test_evaluation_config_rejects_invalid_values(monkeypatch, name, value, message):
+    with pytest.raises(RuntimeError, match=message):
+        reload_config(monkeypatch, **{name: value})
 
 
 def test_faq_config_reads_environment_overrides(monkeypatch, tmp_path):

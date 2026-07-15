@@ -1,0 +1,68 @@
+[
+  {
+    "question": "What does RAG do before generating an answer?",
+    "ground_truth": "RAG retrieves relevant context before generating an answer.",
+    "reference_contexts": [
+      "Retrieval-Augmented Generation, or RAG, retrieves relevant context before generating an answer."
+    ]
+  },
+  {
+    "question": "What does RAG stand for?",
+    "ground_truth": "Retrieval-Augmented Generation.",
+    "reference_contexts": [
+      "Retrieval-Augmented Generation, or RAG, retrieves relevant context before generating an answer."
+    ]
+  },
+  {
+    "question": "What kind of context does RAG retrieve?",
+    "ground_truth": "RAG retrieves relevant context.",
+    "reference_contexts": [
+      "Retrieval-Augmented Generation, or RAG, retrieves relevant context before generating an answer."
+    ]
+  },
+  {
+    "question": "How does RAG help language models answer?",
+    "ground_truth": "RAG helps language models answer using external documents.",
+    "reference_contexts": [
+      "RAG helps language models answer using external documents."
+    ]
+  },
+  {
+    "question": "What does RAG use to help language models answer?",
+    "ground_truth": "RAG uses external documents.",
+    "reference_contexts": [
+      "RAG helps language models answer using external documents."
+    ]
+  },
+  {
+    "question": "What do embedding models convert text into?",
+    "ground_truth": "Embedding models convert text into numerical vectors.",
+    "reference_contexts": [
+      "Embedding models convert text into numerical vectors."
+    ]
+  },
+  {
+    "question": "What type of vectors do embedding models produce from text?",
+    "ground_truth": "Embedding models produce numerical vectors from text.",
+    "reference_contexts": [
+      "Embedding models convert text into numerical vectors."
+    ]
+  },
+  {
+    "question": "How does vector search find semantic similarity?",
+    "ground_truth": "Vector search compares query vectors with document vectors to find semantic similarity.",
+    "reference_contexts": [
+      "Vector search compares query vectors with document vectors to find semantic similarity."
+    ]
+  },
+  {
+    "question": "Who authored the RAG and embedding notes?",
+    "ground_truth": "Not found in knowledge base.",
+    "should_abstain": true
+  },
+  {
+    "question": "On what date were the RAG and embedding notes written?",
+    "ground_truth": "Not found in knowledge base.",
+    "should_abstain": true
+  }
+]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 
@@ -36,6 +37,13 @@ def _parse_nonnegative_float_env(name: str, default: float) -> float:
 def _parse_positive_float_env(name: str, default: float) -> float:
     parsed = _parse_float_env(name, default)
     if parsed <= 0:
+        raise RuntimeError(f"{name} must be positive")
+    return parsed
+
+
+def _parse_finite_positive_float_env(name: str, default: float) -> float:
+    parsed = _parse_float_env(name, default)
+    if not math.isfinite(parsed) or parsed <= 0:
         raise RuntimeError(f"{name} must be positive")
     return parsed
 
@@ -112,6 +120,20 @@ def _parse_nonblank_env(name: str, default: str) -> str:
     if not value:
         raise RuntimeError(f"{name} must not be blank")
     return value
+
+
+def _parse_project_path_env(name: str, default: str) -> Path:
+    path = Path(_parse_nonblank_env(name, default))
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _parse_unit_interval_env(name: str, default: float) -> float:
+    parsed = _parse_float_env(name, default)
+    if not math.isfinite(parsed) or not 0 <= parsed <= 1:
+        raise RuntimeError(f"{name} must be between 0 and 1")
+    return parsed
 
 
 VECTOR_DB_PATH = "data/chroma"
@@ -198,6 +220,38 @@ DEEPSEEK_TIMEOUT = _parse_float_env("DEEPSEEK_TIMEOUT", 30.0)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+EVALUATION_DATASET_PATH = _parse_project_path_env(
+    "EVALUATION_DATASET_PATH", "evaluation/dataset/eval_dataset.json"
+)
+EVALUATION_JSON_REPORT_PATH = _parse_project_path_env(
+    "EVALUATION_JSON_REPORT_PATH", "evaluation/reports/evaluation_report.json"
+)
+EVALUATION_MARKDOWN_REPORT_PATH = _parse_project_path_env(
+    "EVALUATION_MARKDOWN_REPORT_PATH", "evaluation/reports/evaluation_report.md"
+)
+EVALUATION_TOP_K = _parse_positive_int_env("EVALUATION_TOP_K", 5)
+EVALUATION_RAGAS_MODEL = _parse_nonblank_env(
+    "EVALUATION_RAGAS_MODEL", "gpt-4o-mini"
+)
+EVALUATION_RAGAS_EMBEDDING_MODEL = _parse_nonblank_env(
+    "EVALUATION_RAGAS_EMBEDDING_MODEL", "text-embedding-3-small"
+)
+EVALUATION_RAGAS_TIMEOUT = _parse_finite_positive_float_env(
+    "EVALUATION_RAGAS_TIMEOUT", 60.0
+)
+EVALUATION_FAITHFULNESS_THRESHOLD = _parse_unit_interval_env(
+    "EVALUATION_FAITHFULNESS_THRESHOLD", 0.7
+)
+EVALUATION_CONTEXT_RECALL_THRESHOLD = _parse_unit_interval_env(
+    "EVALUATION_CONTEXT_RECALL_THRESHOLD", 0.7
+)
+EVALUATION_QUESTION_PREVIEW_CHARS = _parse_positive_int_env(
+    "EVALUATION_QUESTION_PREVIEW_CHARS", 300
+)
+EVALUATION_ANSWER_PREVIEW_CHARS = _parse_positive_int_env(
+    "EVALUATION_ANSWER_PREVIEW_CHARS", 800
+)
 
 
 def require_deepseek_api_key() -> str:
