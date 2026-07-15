@@ -168,12 +168,18 @@ def _find_embedder(retriever: Any) -> tuple[Any, Any] | None:
         return retriever, embedder
 
     dense_retriever = getattr(retriever, "dense_retriever", None)
-    if dense_retriever is None:
+    if dense_retriever is not None:
+        embedder = getattr(dense_retriever, "embedder", None)
+        if embedder is not None:
+            return dense_retriever, embedder
+
+    child_retriever = getattr(retriever, "child_retriever", None)
+    if child_retriever is None:
         return None
-    embedder = getattr(dense_retriever, "embedder", None)
+    embedder = getattr(child_retriever, "embedder", None)
     if embedder is None:
         return None
-    return dense_retriever, embedder
+    return child_retriever, embedder
 
 
 def _replace(

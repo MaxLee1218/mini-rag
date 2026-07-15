@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.retriever import ParentChildRetriever
 from evaluation.latency_tracer import PipelineTraceError, trace_pipeline_call
 
 
@@ -92,6 +93,43 @@ class FakeHybridPipeline(FakeDensePipeline):
         return SimpleNamespace(answer=answer, contexts=contexts)
 
 
+class FakeParentChildDenseRetriever(FakeDenseRetriever):
+    def retrieve(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        self.embedder.embed_query(args[0], purpose="query")
+        return [
+            {
+                "id": "child::1",
+                "text": "matching child",
+                "metadata": {
+                    "source": "source.md",
+                    "parent_id": "parent::1",
+                },
+                "score": 0.9,
+            }
+        ]
+
+
+class FakeParentStore:
+    def get_many(self, parent_ids):
+        return [
+            {
+                "id": "parent::1",
+                "text": "parent context",
+                "metadata": {"source": "source.md"},
+            }
+        ]
+
+
+class FakeParentChildPipeline(FakeHybridPipeline):
+    def __init__(self):
+        super().__init__()
+        self.retriever = ParentChildRetriever(
+            FakeParentChildDenseRetriever(),
+            FakeParentStore(),
+        )
+
+
 class FakeCustomRetriever:
     def retrieve(self, *args, **kwargs):
         return []
@@ -171,6 +209,24 @@ def test_trace_discovers_hybrid_dense_embedder():
     assert latency.embedding is not None
     assert warnings == []
     assert pipeline.retriever.dense_retriever.embedder is original_embedder
+
+
+def test_trace_discovers_and_restores_parent_child_embedder():
+    pipeline = FakeParentChildPipeline()
+    original_retriever = pipeline.retriever
+    original_embedder = original_retriever.child_retriever.embedder
+
+    _, latency, warnings = trace_pipeline_call(
+        pipeline,
+        "question",
+        clock_ns=FakeClock.expected_sequence(),
+    )
+
+    assert latency.embedding == 20.0
+    assert latency.retrieval == 30.0
+    assert warnings == []
+    assert pipeline.retriever is original_retriever
+    assert original_retriever.child_retriever.embedder is original_embedder
 
 
 def test_trace_marks_unknown_embedding_unavailable():
