@@ -232,5 +232,7 @@ data/raw/private/
 models/
 # Runtime request logs
 logs/*.jsonl
+# Human-reviewed request failures may also contain private request content
+/eval/badcases.json
 
 docs/superpowers
