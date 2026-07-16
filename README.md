@@ -1077,6 +1077,47 @@ View recent local logs in PowerShell:
 Get-Content logs/rag_requests.jsonl
 ```
 
+## Badcase Feedback Loop
+
+A production RAG system improves through repeated observation and evaluation,
+not a single development pass. This repository provides a lightweight offline
+feedback loop:
+
+```text
+用户请求日志
+  -> 疑似失败案例自动发现
+  -> 人工填写 expected_answer、root_cause 和 solution
+  -> 已解决案例增量回流评测集
+  -> 持续评测和优化
+```
+
+Run the loop from the repository root:
+
+```bash
+python scripts/export_badcases.py
+python scripts/import_badcases_to_eval.py
+python eval/run_eval.py
+```
+
+The exporter reads `logs/rag_requests.jsonl` and appends suspected failures to
+`eval/badcases.json`. It detects blank answers, explicit empty `contexts` lists,
+and answers containing `Not found in knowledge base.` or `未找到相关信息`. Current
+request logs do not contain `contexts`; a missing field is treated as unknown
+instead of an empty retrieval result.
+
+Review `eval/badcases.json` manually and fill in `expected_answer`,
+`root_cause`, and `solution` as appropriate. This file may contain private
+questions and answers, so Git ignores it by default. Do not commit it without
+reviewing and sanitizing its contents.
+
+The importer incrementally updates
+`evaluation/dataset/eval_dataset.json`, the dataset used by
+`python eval/run_eval.py`. A nonblank `expected_answer` becomes `ground_truth`;
+when it is absent, a nonblank `solution` is used as the fallback. Unresolved
+cases are skipped so the evaluation dataset remains valid. Existing badcases
+are preserved by timestamp, and existing evaluation samples are preserved by
+normalized question; neither tool overwrites reviewed data.
+
 ## BM25 Retrieval
 
 BM25 is a sparse retrieval algorithm that ranks document chunks by keyword relevance. It runs independently from the existing embedding and Chroma-based dense retrieval pipeline.
