@@ -201,10 +201,8 @@ Enterprise-RAG-Engine/
 
 ### 1. Clone the repository
 
-The destination argument gives the existing remote repository the new local project directory name:
-
 ```bash
-git clone https://github.com/MaxLee1218/mini-rag.git Enterprise-RAG-Engine
+git clone https://github.com/MaxLee1218/Enterprise-RAG-Engine.git
 cd Enterprise-RAG-Engine
 ```
 
