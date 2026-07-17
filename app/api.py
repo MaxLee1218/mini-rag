@@ -29,8 +29,8 @@ TEXT_PREVIEW_CHARS = 200
 
 logger = logging.getLogger(__name__)
 app = FastAPI(
-    title="mini-rag API",
-    description="FastAPI service for the mini-rag project",
+    title="Enterprise RAG Engine API",
+    description="FastAPI service for the Enterprise RAG Engine project",
     version=API_VERSION,
 )
 _pipeline: Any | None = None

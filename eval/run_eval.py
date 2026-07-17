@@ -1,4 +1,4 @@
-"""Run the configured mini-RAG pipeline against the offline evaluation set."""
+"""Run Enterprise RAG Engine against the offline evaluation set."""
 
 from __future__ import annotations
 
@@ -63,7 +63,9 @@ class RunnerDependencies:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse evaluation dataset, report path, and retrieval options."""
     parser = argparse.ArgumentParser(
-        description="Run offline quality and latency evaluation for mini-rag.",
+        description=(
+            "Run offline quality and latency evaluation for Enterprise RAG Engine."
+        ),
     )
     parser.add_argument(
         "--dataset",

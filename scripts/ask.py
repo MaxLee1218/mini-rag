@@ -47,7 +47,9 @@ def positive_int(value: str) -> int:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Ask questions against the local mini-rag knowledge base.",
+        description=(
+            "Ask questions against the local Enterprise RAG Engine knowledge base."
+        ),
     )
     parser.add_argument(
         "question",

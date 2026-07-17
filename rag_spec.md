@@ -1,4 +1,4 @@
-# Enterprise RAG System Specification
+# Enterprise RAG Engine Specification
 
 This document defines the behavioral contracts, architectural boundaries, quality requirements, and staged evolution of this RAG system. Follow it together with `AGENTS.md`.
 

@@ -1,855 +1,283 @@
-# mini-rag
+# Enterprise RAG Engine
 
-A minimal RAG project built from scratch for learning and experimentation.
+Production-oriented Retrieval-Augmented Generation system for enterprise knowledge management.
 
-This project implements a complete basic Retrieval-Augmented Generation pipeline, including document loading, chunking, embedding, vector storage, retrieval, prompt construction, LLM generation, source citation, smoke testing, and a command-line question-answering entrypoint.
+**An AI-powered knowledge assistant that retrieves, grounds, and generates answers from enterprise documents.**
+
+Enterprise RAG Engine is an enterprise knowledge intelligence system powered by Retrieval-Augmented Generation. It provides a modular foundation for building an Enterprise Knowledge Base Assistant across quality, engineering, procurement, and operations workflows while keeping source provenance and measurable RAG quality at the center of the system.
+
+## Problem
+
+Traditional enterprise knowledge systems often make critical information difficult to use:
+
+- policies, procedures, and technical knowledge are scattered across PDFs and other documents;
+- manual search depends on exact wording and requires employees to inspect multiple files;
+- slow knowledge retrieval delays operational and engineering decisions;
+- inconsistent interpretations lead to inconsistent answers across teams.
+
+Enterprise RAG Engine combines semantic retrieval, keyword retrieval, document grounding, and LLM generation. It finds evidence by both meaning and terminology, builds a bounded prompt from retrieved content, and returns an answer with traceable sources.
+
+## Use Case
+
+### Enterprise Quality Management Knowledge Base
+
+The target scenario is an internal knowledge assistant that helps manufacturing engineers, quality engineers, procurement teams, and operations teams query controlled enterprise knowledge.
+
+Representative data sources include the following document groups.
+
+#### 1. SOP Documents
+
+Examples:
+
+- `Supplier Quality Manual.pdf`
+- `Incoming Inspection Procedure.pdf`
+- `Production Quality Standard.pdf`
+- `ISO9001 Procedure.pdf`
+
+Suitable source material can come from ISO public documents, publicly available enterprise quality manuals, appropriately licensed Kaggle datasets, and synthetic enterprise documents. Verify licensing, confidentiality, and data-handling requirements before ingestion.
+
+#### 2. Technical Documentation
+
+Examples:
+
+- Machine Maintenance Manual
+- Failure Analysis Report
+- Engineering Specification
+
+#### 3. Enterprise Policies
+
+Examples:
+
+- Procurement Policy
+- Risk Management Guideline
+- Safety Regulation
+
+## Example Query
+
+The following illustrates the expected grounded-answer experience for a quality-management knowledge base. The named document and page are demo content, not a claim about files included in this repository.
+
+**User**
+
+> What is the procedure when supplier quality deviation occurs?
+
+**System answer**
+
+> According to the Supplier Quality Manual:
+>
+> 1. Create a deviation report.
+> 2. Perform root cause analysis.
+> 3. Submit a supplier corrective action request.
+>
+> **Source:** Supplier Quality Manual.pdf, page 24
+
+The system generates the answer from retrieved enterprise documents and derives source references from the retrieved contexts. If the available evidence is insufficient, the grounded generation contract requires the system to abstain instead of fabricating an answer.
+
+## Architecture
+
+Enterprise RAG Engine remains a modular monolith with explicit boundaries between ingestion, retrieval, generation, orchestration, and transport.
+
+```text
+Enterprise Documents
+        ↓
+Document Processing
+        ↓
+Chunking
+        ↓
+Embedding + BM25 Index
+        ↓
+Hybrid Retrieval
+        ↓
+Optional Reranking
+        ↓
+Prompt Construction
+        ↓
+LLM Generation
+        ↓
+Answer + Sources
+```
+
+The current system supports dense retrieval, sparse retrieval, hybrid search with score normalization, optional Cross-Encoder reranking, citation generation, and an offline evaluation pipeline. Query execution reads existing indexes; document ingestion remains an explicit offline operation.
 
 ## Features
 
-- Load raw documents from `data/raw/`
-- Split documents into chunks with metadata preservation
-- Optional parent-child chunking with persistent parent lookup
-- Generate embeddings with a multilingual SentenceTransformer model
-- Store vectors in ChromaDB
-- Retrieve relevant contexts by semantic similarity
-- Build RAG prompts with context and source constraints
-- Generate answers with DeepSeek API
-- Append sources to answers as a fallback
-- Run real full-chain smoke tests
-- Ask questions through a formal CLI entrypoint
-- Expose `GET /health` and `POST /ask` through FastAPI
-- Route maintained frequent questions through an FAQ fast path before RAG
-- Cache positive FAQ matches in optional Redis with SQLite as the source of truth
-- Run offline retrieval, RAGAS quality, and stage-latency evaluation
-- Generate versioned JSON and human-readable Markdown evaluation reports
-- Unit tests for core modules and CLI behavior
+### Document Intelligence
+
+- PDF, DOCX, Markdown, and TXT ingestion
+- recursive document discovery with configurable extensions
+- standard and optional parent-child chunking
+- metadata and source-provenance preservation
+- persistent Chroma vectors and SQLite parent-chunk lookup
+
+### Retrieval System
+
+- embedding-based semantic retrieval with Sentence Transformers
+- BM25 keyword retrieval for exact enterprise terminology
+- normalized hybrid retrieval and deterministic score fusion
+- configurable retrieval depth and result deduplication
+- optional Cross-Encoder reranking with safe fallback behavior
+
+### Generation
+
+- context-grounded generation through the DeepSeek API
+- source citation and source-normalization support
+- bounded prompt construction with abstention instructions
+- hallucination reduction through evidence-only prompting
+- FAQ fast path for maintained answers and a RAG deep path for complex questions
+- conversation-aware query rewriting with safe fallback to the original query
+
+### Evaluation
+
+- versioned offline evaluation dataset
+- retrieval hit rate and abstention evaluation
+- RAGAS faithfulness, answer relevance, context precision, and context recall
+- per-stage latency tracing with p50 and p95 analysis
+- structured JSON and human-readable Markdown reports
+- bad-case export and resolved-case import workflow
+
+### API Service
+
+- FastAPI backend
+- `GET /health` health endpoint
+- `POST /ask` REST API endpoint
+- request validation with stable response schemas
+- structured operational logging and request correlation
+
+## Technical Stack
+
+| Component | Technology |
+|---|---|
+| Language | Python 3.11 |
+| API | FastAPI |
+| Vector Database | ChromaDB |
+| Embedding | Sentence Transformers |
+| Sparse Retrieval | BM25 |
+| LLM | DeepSeek API |
+| Evaluation | RAGAS |
+| Testing | Pytest |
 
 ## Project Structure
 
 ```text
-mini-rag/
+Enterprise-RAG-Engine/
 ├── app/
-│   ├── chunker.py              # Split documents into chunks
-│   ├── api.py                  # FastAPI HTTP service layer
-│   ├── config.py               # Project configuration and .env loading
-│   ├── document_loader.py      # Load raw text documents
-│   ├── embeddings.py           # Embedding model wrapper
-│   ├── generator.py            # DeepSeek LLM generator
-│   ├── pipeline.py             # Main RAG orchestration layer
-│   ├── pipeline_factory.py     # Build the default RAG pipeline
-│   ├── parent_store.py         # Persistent SQLite parent chunk lookup
-│   ├── schemas.py              # API request and response models
-│   ├── prompt_builder.py       # Build prompts and handle sources
-│   ├── retriever.py            # Retrieve relevant contexts
-│   ├── reranker.py             # Optional Cross-Encoder second-stage reranking
-│   └── vector_store.py         # Chroma vector store wrapper
-│
-├── data/
-│   ├── raw/                    # Raw documents
-│   ├── chroma/                 # Local Chroma vector database
-│   └── parents/                # Parent chunk SQLite database
-│
-├── models/                     # Optional local embedding models
-│
+│   ├── conversation/          # Conversation models and in-memory history
+│   ├── faq/                   # FAQ fast path, SQLite repository, and cache
+│   ├── middleware/            # Query optimization orchestration
+│   ├── query_rewriter/        # Rule-based and LLM query rewriting
+│   ├── utils/                 # Shared retrieval utilities
+│   ├── api.py                 # FastAPI transport layer
+│   ├── chunker.py             # Standard and parent-child chunking
+│   ├── document_loader.py     # PDF, DOCX, Markdown, and TXT loading
+│   ├── embeddings.py          # Sentence Transformer embedding wrapper
+│   ├── generator.py           # DeepSeek generation adapter
+│   ├── hybrid_retriever.py    # Dense and sparse score fusion
+│   ├── pipeline.py            # Core RAG orchestration
+│   ├── pipeline_factory.py    # Configured component composition
+│   ├── prompt_builder.py      # Grounded prompt and source construction
+│   ├── reranker.py            # Optional Cross-Encoder reranking
+│   ├── retriever.py           # Vector retrieval
+│   └── vector_store.py        # ChromaDB persistence adapter
 ├── scripts/
-│   ├── ingest.py               # Build or update vector database
-│   ├── query.py                # Basic retrieval query script
-│   ├── smoke_pipeline_api.py   # Real API full-chain smoke test
-│   └── ask.py                  # Formal CLI question-answering entrypoint
-│
-├── tests/                      # Unit tests
-├── evaluation/                 # Offline dataset, metrics, tracing, and reports
-├── eval/run_eval.py            # Offline evaluation entrypoint
-├── reports/                    # Generated evaluation report snapshots
-├── .env.example                # Environment variable template
-├── .gitignore
-├── README.md
-└── requirements.txt
+│   ├── ingest.py              # Explicit document ingestion
+│   ├── query.py               # Retrieval diagnostics
+│   ├── ask.py                 # Command-line question answering
+│   └── smoke_pipeline_api.py  # Opt-in full-chain smoke test
+├── eval/
+│   └── run_eval.py            # Offline evaluation entrypoint
+├── evaluation/                # Dataset, metrics, tracing, and reporting
+├── tests/                     # Offline unit and integration tests
+├── data/
+│   ├── raw/                   # Source documents
+│   ├── chroma/                # Local vector index
+│   └── parents/               # Parent-chunk SQLite store
+├── reports/                   # Generated evaluation reports
+├── .env.example               # Configuration template
+├── rag_spec.md                # RAG contracts and quality requirements
+├── requirements.txt
+└── README.md
 ```
 
-## RAG Pipeline
+## Installation
 
-The main workflow is:
+### 1. Clone the repository
 
-```text
-Raw Documents
-    ↓
-Document Loader
-    ↓
-Chunker
-    ↓
-Embedder
-    ↓
-Chroma Vector Store
-    ↓
-Retriever
-    ↓
-Cross-Encoder Reranker (optional)
-    ↓
-Prompt Builder
-    ↓
-DeepSeek Generator
-    ↓
-RAG Pipeline Result
-```
-
-The main runtime entrypoint is `app/pipeline.py`.
-
-`RAGPipeline` connects retrieval, prompt building, generation, and source handling into one stable interface.
-
-## FAQ Fast Path and RAG Deep Path
-
-Online questions use two deliberately separate paths:
-
-```text
-Question
-  -> normalize
-  -> Redis FAQ L1 cache
-  -> SQLite-backed in-process FAQ BM25 matcher
-  -> FAQ hit: maintained answer, no query rewrite/retrieval/prompt/LLM
-  -> FAQ miss: conversation query rewrite
-  -> document BM25 + vector retrieval + score fusion
-  -> optional reranking -> prompt -> DeepSeek generator
-```
-
-SQLite is the only persistent FAQ source. Redis contains positive query-result
-cache entries and can be stopped without losing FAQ behavior. The FAQ BM25
-index contains only FAQ questions and aliases; the existing document BM25 index
-contains knowledge-base chunks and remains part of `HybridRetriever`.
-
-The fast path reduces average latency and provider cost for frequent standard
-questions and keeps answers stable and manually maintainable. Complex questions
-still use the full RAG path and preserve sources from the original knowledge
-base files.
-
-Example fast path:
-
-```text
-什么是 RAG？
--> Redis or FAQ BM25 match
--> route=faq
--> return maintained answer without Generator
-```
-
-Example deep path:
-
-```text
-根据知识库比较 Redis 和 Chroma 在当前项目中的职责
--> FAQ miss
--> route=rag
--> hybrid retrieval -> prompt -> Generator
-```
-
-### FAQ and Redis configuration
-
-| Variable | Default | Meaning |
-|---|---:|---|
-| `FAQ_ENABLED` | `true` | Enable FAQ routing. |
-| `FAQ_DB_PATH` | `data/faq.db` | SQLite FAQ database, relative to project root unless absolute. |
-| `FAQ_MATCH_THRESHOLD` | `1.0` | Minimum raw FAQ BM25 score. |
-| `FAQ_MATCH_MARGIN` | `0.15` | Minimum gap from the second distinct FAQ. |
-| `FAQ_CACHE_ENABLED` | `true` | Enable Redis positive-match caching. |
-| `FAQ_CACHE_TTL_SECONDS` | `86400` | Positive cache TTL. |
-| `FAQ_CACHE_PREWARM` | `true` | Prewarm canonical and alias exact queries. |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL; never written to request logs. |
-| `REDIS_CONNECT_TIMEOUT_SECONDS` | `0.2` | Redis connection timeout. |
-| `REDIS_SOCKET_TIMEOUT_SECONDS` | `0.2` | Redis operation timeout. |
-
-Threshold and margin are raw BM25 score controls, not probabilities.
-
-### Start the dual-path API
+The destination argument gives the existing remote repository the new local project directory name:
 
 ```bash
-docker compose up -d redis
-python -m scripts.faq_admin init
-python -m scripts.faq_admin import data/faqs.example.json
-python -m scripts.faq_admin list
-python -m uvicorn app.api:app --reload
+git clone https://github.com/MaxLee1218/mini-rag.git Enterprise-RAG-Engine
+cd Enterprise-RAG-Engine
 ```
 
-Stop only Redis with:
+### 2. Create a virtual environment and install dependencies
 
 ```bash
-docker compose stop redis
-```
-
-FAQ request:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"faq-demo","question":"RAG 是什么？"}'
-```
-
-The response retains the original fields and adds route metadata:
-
-```json
-{
-  "question": "RAG 是什么？",
-  "answer": "RAG 是 Retrieval-Augmented Generation……",
-  "sources": [{"index": 1, "source": "README.md"}],
-  "route": "faq",
-  "faq_id": "faq-rag-definition",
-  "faq_score": 1.0,
-  "faq_match_type": "alias",
-  "faq_cache_hit": false
-}
-```
-
-RAG request:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"rag-demo","question":"根据知识库比较 Redis 和 Chroma 在当前项目中的职责"}'
-```
-
-Its response has `"route": "rag"`, null FAQ fields, and the existing RAG
-answer and source objects.
-
-### Dual-path smoke checks
-
-FAQ smoke uses the real SQLite FAQ database and does not need a DeepSeek key:
-
-```bash
-python -m scripts.smoke_pipeline_api \
-  --route faq \
-  --question "RAG 是什么？" \
-  --expect-route faq
-```
-
-RAG smoke uses the existing Chroma data, document BM25, hybrid fusion,
-reranking configuration, and real generator:
-
-```bash
-python -m scripts.smoke_pipeline_api \
-  --route rag \
-  --question "根据知识库比较 Redis 和 Chroma 在当前项目中的职责" \
-  --expect-route rag
-```
-
-Failure behavior is predictable:
-
-- Redis unavailable: the immutable in-process FAQ matcher continues working.
-- FAQ database unavailable at initialization: FAQ routing is disabled and the
-  request enters RAG.
-- FAQ miss or matcher error: the request enters RAG; it is not converted into
-  a fabricated no-answer response.
-- RAG requires the existing vector data and DeepSeek provider configuration.
-- After importing changed FAQ data, restart the API process to rebuild the
-  immutable in-process FAQ BM25 index. This release has no online reload.
-
-## Requirements
-
-Recommended Python version:
-
-```bash
-python 3.11
-```
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-`ragas` is installed through `requirements.txt`; it is imported only by the
-offline evaluation command and is not required when importing or serving the
-normal RAG application modules.
-
-If you are using a virtual environment:
-
-```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-On Windows PowerShell:
+### 3. Configure the environment
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-## Evaluation
-
-A RAG failure cannot be diagnosed reliably by reading only the final answer.
-An irrelevant retrieved chunk is a retrieval failure, while an unsupported
-claim made despite useful evidence is a generation failure. The offline
-evaluation layer measures these boundaries separately and keeps evaluation out
-of the online ingest, query, ask, and API flows.
-
-The default flow is:
-
-```text
-evaluation dataset
-  -> existing RAGPipeline.ask()
-  -> answer, contexts, sources, stage latency
-  -> retrieval hit and abstention evaluation
-  -> RAGAS generation/retrieval metrics
-  -> p50/p95 latency aggregation
-  -> JSON and Markdown reports
-```
-
-### Run the evaluation
-
-Activate the project environment, install dependencies, ingest the current
-documents, and configure `DEEPSEEK_API_KEY` in `.env`:
+Copy the provided template and keep the resulting `.env` file out of version control:
 
 ```bash
-source .venv/bin/activate
-pip install -r requirements.txt
-python scripts/ingest.py
-python eval/run_eval.py
+cp .env.example .env
 ```
 
-The pipeline and default RAGAS judge both use the existing DeepSeek
-OpenAI-compatible endpoint. Answer Relevancy uses the project's local
-SentenceTransformer because DeepSeek does not expose an embedding API. Unit
-tests never make provider calls; `python eval/run_eval.py` is the explicit
-live-provider command.
-
-Optional path and retrieval overrides are available without changing source:
-
-```bash
-python eval/run_eval.py \
-  --dataset evaluation/dataset/eval_dataset.json \
-  --json-report reports/evaluation_report.json \
-  --markdown-report reports/evaluation_report.md \
-  --top-k 5
-```
-
-### Dataset contract
-
-Each JSON row requires `question` and `ground_truth`. The checked-in dataset also
-uses two optional evaluation fields:
-
-```json
-{
-  "question": "What does RAG retrieve before generating an answer?",
-  "ground_truth": "RAG retrieves relevant context before generating an answer.",
-  "reference_contexts": [
-    "Retrieval-Augmented Generation, or RAG, retrieves relevant context before generating an answer."
-  ],
-  "should_abstain": false
-}
-```
-
-- `reference_contexts` contains exact evidence from the repository documents and
-  supports a deterministic retrieval hit calculation.
-- `should_abstain` identifies questions whose answer is absent from the knowledge
-  base. These negative samples are excluded from the hit-rate denominator and
-  measured separately as abstention accuracy.
-
-This separation avoids penalizing a correct `Not found in knowledge base.`
-response as a retrieval miss.
-
-### Metrics
-
-| Layer | Metric | Meaning |
-| - | - | - |
-| Retrieval | Hit Rate | Fraction of answerable samples whose retrieved contexts contain an exact normalized reference context. |
-| Retrieval | Context Precision | Whether higher-ranked retrieved contexts are useful for the reference answer. |
-| Retrieval | Context Recall | Whether retrieved contexts contain the information needed by the reference answer. |
-| Generation | Faithfulness | Whether generated claims are supported by retrieved contexts. |
-| Generation | Answer Relevancy | Whether the answer addresses the user question. |
-
-RAGAS scores are in the `[0, 1]` range. Reports include the valid sample count for
-each aggregate. A metric or provider failure remains `null` with a structured
-error; it is never silently converted to zero.
-
-Latency is traced around the existing pipeline components without copying or
-changing `RAGPipeline.ask()`:
-
-- `embedding`: query embedding time;
-- `retrieval`: retriever time excluding embedding, so stages are not double
-  counted;
-- `generation`: generator call time;
-- `total`: complete `pipeline.ask()` wall-clock time, including prompt building,
-  reranking, and source normalization not listed as separate stages.
-
-The report uses NumPy percentiles. p50 describes typical user experience; p95
-highlights slow-request bottlenecks. Four stages are not forced to sum to total.
-
-### Evaluation configuration
-
-| Variable | Default | Meaning |
-| - | - | - |
-| `EVALUATION_DATASET_PATH` | `evaluation/dataset/eval_dataset.json` | Offline dataset path. |
-| `EVALUATION_JSON_REPORT_PATH` | `reports/evaluation_report.json` | Structured report path. |
-| `EVALUATION_MARKDOWN_REPORT_PATH` | `reports/evaluation_report.md` | Human-readable report path. |
-| `EVALUATION_TOP_K` | `5` | Final contexts requested from the existing pipeline. |
-| `EVALUATION_RAGAS_PROVIDER` | `deepseek` | Evaluator provider (`deepseek` or `openai`). |
-| `EVALUATION_RAGAS_MODEL` | `deepseek-v4-flash` | RAGAS evaluator LLM; follows the selected provider when unset. |
-| `EVALUATION_RAGAS_EMBEDDING_MODEL` | `local` | RAGAS answer-relevancy embeddings; uses the project embedder for DeepSeek. |
-| `EVALUATION_RAGAS_TIMEOUT` | `60` | Evaluator request timeout in seconds. |
-| `EVALUATION_FAITHFULNESS_THRESHOLD` | `0.7` | Failed-example hallucination threshold. |
-| `EVALUATION_CONTEXT_RECALL_THRESHOLD` | `0.7` | Failed-example insufficient-context threshold. |
-
-RAGAS is loaded lazily. The adapter supports the current collections API and a
-legacy `evaluate()` fallback. It also contains a narrow in-memory compatibility
-shim for the known RAGAS 0.4.3 import of a removed VertexAI type; it does not
-modify installed packages or downgrade LangChain. If RAGAS or its evaluator
-configuration is unavailable, pipeline, retrieval, and latency results are still
-written with an explicit `unavailable` or `partial` status.
-
-Generated reports contain aggregate metrics, bounded failed-answer previews, and
-source identifiers. They do not persist full retrieved contexts, credentials, or
-raw provider exception payloads.
-
-### Real evaluation snapshot
-
-The checked-in reports were generated on 2026-07-15 with 10 samples, RAGAS
-0.4.3, `deepseek-v4-flash`, the local multilingual MiniLM embedder, and `top_k=5`.
-All four RAGAS metrics contain 10 valid scores.
-
-| Metric | Score |
-| - | -: |
-| Retrieval Hit Rate | 1.0000 |
-| Abstention Accuracy | 1.0000 |
-| Faithfulness | 0.8000 |
-| Answer Relevancy | 0.6103 |
-| Context Precision | 0.8167 |
-| Context Recall | 0.9000 |
-
-| Stage | p50 (ms) | p95 (ms) |
-| - | -: | -: |
-| Embedding | 16.074 | 8592.449 |
-| Retrieval | 3.788 | 5.316 |
-| Generation | 1029.842 | 1193.727 |
-| Total | 1066.110 | 12580.570 |
-
-The high embedding and total p95 values include cold-start model loading in this
-offline run. See `reports/evaluation_report.md` for the generated report.
-
-## Environment Variables
-
-Create a `.env` file in the project root using `.env.example` as a template:
+At minimum, configure the DeepSeek provider:
 
 ```env
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_API_KEY=your_deepseek_api_key
 DEEPSEEK_MODEL=deepseek-v4-flash
-DEEPSEEK_TIMEOUT=30
 ```
 
-The `.env` file is ignored by Git.
+Additional retrieval, reranking, parent-child chunking, FAQ, conversation, and evaluation settings are documented in `.env.example`. Never commit real credentials or private enterprise documents.
 
-The project automatically loads it through `python-dotenv` when `app.config` is imported.
+## Run the System
 
-Do not commit your real API key.
+### Ingest Documents
 
-## Reranking
-
-The first retrieval stage uses BM25 and vector retrieval to recall candidates quickly, then hybrid retrieval normalizes, fuses, and deduplicates them. The optional second stage uses `cross-encoder/ms-marco-TinyBERT-L2-v2` to jointly encode each query and candidate document, produce a raw relevance score, and reorder only those recalled candidates.
-
-The default flow is:
-
-```text
-Recall and fuse 10 candidates
-→ TinyBERT Cross-Encoder reranking
-→ Keep 5 documents for the prompt
-```
-
-Configure it in `.env`:
-
-```env
-RERANKER_ENABLED=true
-RERANKER_MODEL=cross-encoder/ms-marco-TinyBERT-L2-v2
-RERANKER_TOP_K=5
-RERANKER_CANDIDATE_K=10
-RERANKER_BATCH_SIZE=16
-RERANKER_MAX_LENGTH=256
-RERANKER_DEVICE=cpu
-RERANKER_FAILURE_MODE=fallback
-RERANKER_LOCAL_FILES_ONLY=false
-```
-
-If `RERANKER_MODEL` is a Hugging Face model name, the first real reranking call may download the TinyBERT model. Later runs reuse the Hugging Face cache. To use a model downloaded into this project instead:
-
-```env
-RERANKER_MODEL=./models/ms-marco-TinyBERT-L2-v2
-RERANKER_LOCAL_FILES_ONLY=true
-```
-
-The model is loaded lazily and reused by the pipeline. If loading or inference fails, the pipeline logs the failure, keeps the original fused order, applies the final Top-K limit, and continues generation. Set `RERANKER_ENABLED=false` to retain a no-reranker baseline. Any `sentence-transformers.CrossEncoder`-compatible model can be selected through `RERANKER_MODEL` without changing Pipeline code.
-
-TinyBERT is a lightweight Cross-Encoder suitable for CPU environments, but Cross-Encoder inference still adds query latency. Reduce `RERANKER_CANDIDATE_K`, `RERANKER_MAX_LENGTH`, or `RERANKER_BATCH_SIZE` when lower latency is more important.
-
-`cross-encoder/ms-marco-TinyBERT-L2-v2` is primarily trained on English MS MARCO data. It is appropriate for lightweight engineering verification and English retrieval scenarios. Projects dominated by Chinese documents should validate it with an independent evaluation set and retain the ability to switch to a Chinese or multilingual reranker. This project does not claim an unmeasured Chinese retrieval improvement.
-
-Unit tests use fake models and do not download TinyBERT:
-
-```bash
-python -m pytest tests/test_reranker.py -q
-python -m pytest -q
-```
-
-## Conversation Memory and Query Rewriting
-
-`POST /ask` uses `QueryOptimizationMiddleware` before the RAG pipeline. The
-middleware loads the requested session's recent completed turns and calls the
-configured DeepSeek model once to produce a retrieval-ready question. The LLM
-returns an independent rewrite when the question depends on history and returns
-the original question when no rewrite is needed. The original question is
-preserved for the final prompt, response, and request log; only
-`rewritten_query` is passed to retrieval and reranking.
-
-Every `/ask` request requires a nonblank `session_id` of at most 128
-characters. Reuse the same value for follow-up questions:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "demo-user-001",
-    "question": "什么是 Middleware？"
-  }'
-```
-
-Second round:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "demo-user-001",
-    "question": "它为什么可以优化查询？"
-  }'
-```
-
-Conversation history currently uses `InMemoryConversationStore` and keeps the
-latest five completed turns per session by default. History is lost when the
-process restarts and is not shared between multiple worker processes. A future
-MySQL implementation can implement the stable `ConversationStore` interface
-without changing middleware or API orchestration.
-
-Configuration:
-
-```env
-CONVERSATION_HISTORY_LIMIT=5
-QUERY_REWRITE_ENABLED=true
-QUERY_REWRITE_PROVIDER=deepseek
-QUERY_REWRITE_TIMEOUT=10.0
-```
-
-`CONVERSATION_HISTORY_LIMIT` must be between 3 and 5. Disabling rewriting keeps
-the session contract but sends the original question to retrieval without an
-extra DeepSeek call. When rewriting is enabled, each valid `/ask` request adds
-one DeepSeek API call and therefore adds latency and provider usage. A missing
-key, timeout, provider error, or invalid rewrite output safely falls back to the
-original question instead of failing the RAG request.
-
-The current CLI entrypoints call `RAGPipeline` directly and do not pass through
-the FastAPI middleware, so their questions are not conversation-rewritten.
-
-Run focused and complete offline tests with the project virtual environment:
-
-```bash
-.venv/bin/python -m pytest tests/test_conversation_memory_store.py -q
-.venv/bin/python -m pytest tests/test_query_rewriter.py -q
-.venv/bin/python -m pytest tests/test_query_optimization_middleware.py -q
-.venv/bin/python -m pytest tests/test_api_conversation.py -q
-.venv/bin/python -m pytest -q
-```
-
-Run the deterministic conversation smoke check without an API key, model
-download, vector database, or network access:
-
-```bash
-.venv/bin/python scripts/smoke_conversation.py --mock
-```
-
-An opt-in real-model check uses English retrieval examples:
-
-```bash
-python -m scripts.smoke_reranker
-```
-
-Future model comparisons can disable reranking for a baseline and retain both the original retrieval scores and successful `rerank_score` values. A production evaluation should compare no reranker, TinyBERT, and relevant Chinese or multilingual models using Hit Rate@K, Recall@K, MRR@K, NDCG@K, mean rerank latency, and P95 rerank latency. No evaluation numbers are fabricated here.
-
-## Parent-Child Chunking
-
-Traditional chunking has a useful but awkward trade-off. Small chunks usually
-match focused queries more precisely, but they may omit the surrounding facts
-the generator needs. Large chunks preserve context, but their embeddings can
-mix several topics and reduce retrieval precision. Parent-child mode separates
-those responsibilities:
-
-```text
-small child -> retrieval
-large parent -> prompt and generation
-```
-
-The complete flow is:
-
-```text
-Document
-  ↓
-Parent chunks
-  ↓
-Child chunks
-  ↓
-Child embeddings in Chroma
-  ↓
-Vector search (chunk_type == child)
-  ↓
-child metadata.parent_id
-  ↓
-Parent lookup in SQLite
-  ↓
-Parent context
-  ↓
-Prompt Builder -> LLM
-```
-
-### Modes and configuration
-
-`standard` is the default and preserves the existing workflow. It embeds and
-retrieves ordinary chunks; legacy vectors without `chunk_type` remain
-queryable. `parent-child` stores only child embeddings in Chroma and resolves
-their parents before returning contexts to the Pipeline. Parent chunks never
-participate in vector search.
-
-Configure the default mode in `.env`:
-
-```env
-RAG_CHUNK_MODE=standard
-RAG_PARENT_CHUNK_SIZE=1000
-RAG_PARENT_CHUNK_OVERLAP=100
-RAG_CHILD_CHUNK_SIZE=250
-RAG_CHILD_CHUNK_OVERLAP=50
-RAG_PARENT_STORE_PATH=data/parents/parents.sqlite3
-```
-
-The parent size controls the maximum context unit sent to the LLM. The child
-size controls the searchable unit. Each overlap retains boundary context
-between adjacent chunks of that level. Child size must not exceed parent size,
-and each overlap must be non-negative and smaller than its chunk size.
-
-### Ingest
-
-Standard mode:
-
-```bash
-python scripts/ingest.py \
-  --chunk-mode standard
-```
-
-Parent-child mode:
-
-```bash
-python scripts/ingest.py \
-  --chunk-mode parent-child \
-  --parent-chunk-size 1000 \
-  --parent-chunk-overlap 100 \
-  --child-chunk-size 250 \
-  --child-chunk-overlap 50
-```
-
-Preview either operation without embeddings or writes:
-
-```bash
-python scripts/ingest.py --chunk-mode standard --dry-run
-
-python scripts/ingest.py \
-  --chunk-mode parent-child \
-  --parent-chunk-size 1000 \
-  --parent-chunk-overlap 100 \
-  --child-chunk-size 250 \
-  --child-chunk-overlap 50 \
-  --dry-run
-```
-
-`--reset` clears the Chroma collection before ingestion. In parent-child mode
-it also clears the SQLite parent store before writing the new parents and
-children. `--dry-run` touches neither store and reports document, parent,
-child, average-child, and skipped-empty counts.
-
-### Query and debugging
-
-Standard retrieval:
-
-```bash
-python scripts/query.py \
-  --query "什么是 RAG？" \
-  --chunk-mode standard
-```
-
-Parent-child retrieval with diagnostics:
-
-```bash
-python scripts/query.py \
-  --query "父子块切分有什么作用？" \
-  --chunk-mode parent-child \
-  --top-k 5 \
-  --show-context \
-  --show-child \
-  --show-parent-id
-```
-
-`--show-child` prints the highest-ranked matched child ID, text, and score for
-each restored parent. The normal displayed text and `--show-context` output are
-the parent text. `scripts/ask.py`, FastAPI, and the smoke pipeline use
-`RAG_CHUNK_MODE` through `pipeline_factory.py`, so they do not duplicate parent
-lookup logic.
-
-In parent-child mode, `top_k` is the number of child vector hits requested.
-Several children may map to the same parent; parents are deduplicated in first
-child-hit order, so the final number of parent contexts can be smaller than
-`top_k`.
-
-### Storage and identity
-
-- Child text, embeddings, and flat child metadata are stored in the configured
-  Chroma collection.
-- Parent text and metadata are stored in
-  `data/parents/parents.sqlite3` by default.
-- `parent_id` links each child to exactly one parent. IDs combine a SHA-256
-  source-derived document ID, stable indexes, and a bounded text hash. Repeating
-  ingestion of unchanged content therefore upserts the same IDs.
-- Sources always come from the original `metadata.source`; internal parent IDs,
-  child IDs, and the SQLite path are never used as citations.
-
-Changing chunk sizes, overlaps, source paths, or content changes persisted IDs
-and can make an existing pair of stores inconsistent. Run parent-child ingest
-with `--reset` after such changes. Do not delete or replace only Chroma or only
-the parent SQLite database: a child whose parent is missing causes an explicit
-`ParentChunkNotFoundError` instead of silently falling back to child text.
-
-## Prepare Documents
-
-Put your raw text documents into:
-
-```text
-data/raw/
-```
-
-Example:
-
-```text
-data/raw/
-├── note1.txt
-├── note2.txt
-└── profile.txt
-```
-
-After adding or changing documents, rebuild the vector database.
-
-## Build the Vector Database
-
-Run:
+Place supported documents under `data/raw/`, then build or update the configured indexes explicitly:
 
 ```bash
 python scripts/ingest.py
 ```
 
-This script loads documents from `data/raw/`, chunks them, embeds them, and stores them into ChromaDB under `data/chroma/`.
-
-Important:
-
-```text
-scripts/ingest.py updates the vector database.
-scripts/ask.py only asks questions.
-scripts/ask.py does not automatically ingest new documents.
-```
-
-If you modify files in `data/raw/`, run `scripts/ingest.py` again.
-
-## Ask Questions from CLI
-
-Single-question mode:
+To preview document processing without writing embeddings or indexes:
 
 ```bash
-python scripts/ask.py "RAG是什么？"
+python scripts/ingest.py --dry-run
 ```
 
-Interactive mode:
+Changing embedding models, dimensions, chunking rules, or parent-child settings can invalidate persisted indexes. Treat rebuilds as controlled operations and use `--reset` only when the affected data is understood.
+
+### Query from the CLI
+
+Ask one question:
+
+```bash
+python scripts/ask.py "What is the incoming inspection procedure?"
+```
+
+Or start interactive mode:
 
 ```bash
 python scripts/ask.py
 ```
 
-In interactive mode, type:
-
-```text
-exit
-quit
-q
-```
-
-to exit.
-
-Use a custom retrieval count:
+For retrieval-only diagnostics:
 
 ```bash
-python scripts/ask.py "RAG是什么？" --top-k 3
+python scripts/query.py --query "supplier corrective action"
 ```
 
-Show retrieved context for debugging:
-
-```bash
-python scripts/ask.py "RAG是什么？" --show-context
-```
-
-Hide the extra source section:
-
-```bash
-python scripts/ask.py "RAG是什么？" --no-sources
-```
-
-## Run Full-Chain Smoke Test
-
-After building the vector database and configuring `.env`, run:
-
-```bash
-python scripts/smoke_pipeline_api.py
-```
-
-This script verifies the real end-to-end chain:
-
-```text
-Embedder
-    ↓
-ChromaVectorStore
-    ↓
-Retriever
-    ↓
-Prompt Builder
-    ↓
-DeepSeekGenerator
-    ↓
-RAGPipeline
-```
-
-The smoke script is only for manual verification.
-
-It does not automatically ingest documents, rebuild the database, delete the database, or hardcode API keys.
-
-
-## Ask Questions from FastAPI
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Start the local API service:
+### Start the API
 
 ```bash
 uvicorn app.api:app --reload
 ```
 
-Open the generated API docs:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-Check service health:
+Check process health:
 
 ```bash
 curl http://127.0.0.1:8000/health
@@ -860,277 +288,90 @@ Ask a question:
 ```bash
 curl -X POST "http://127.0.0.1:8000/ask" \
   -H "Content-Type: application/json" \
-  -d '{"question": "你的问题"}'
+  -d '{
+    "session_id": "quality-demo-001",
+    "question": "What is the procedure when supplier quality deviation occurs?"
+  }'
 ```
 
-The API default `top_k` is `5`, matching the CLI and reranker default. You can override it per request:
+The RAG route requires a populated vector index and a valid DeepSeek configuration. The optional FAQ route uses SQLite as its persistent source of truth and can use Redis as a non-critical positive-match cache.
 
-```json
-{
-  "question": "RAG是什么？",
-  "top_k": 3
-}
-```
+## Evaluation
 
-Important:
+Enterprise RAG quality must be measured at retrieval, generation, and operational boundaries rather than judged from isolated demo answers.
 
-```text
-POST /ask only answers from the existing vector database.
-After adding, deleting, or changing files in data/raw/, run python scripts/ingest.py again.
-GET /health only means the API service started. It does not verify the DeepSeek API key or vector database data.
-```
+The offline evaluation pipeline supports:
 
-## Run Tests
+- **Retrieval Hit Rate:** whether answerable questions retrieve known reference evidence;
+- **Faithfulness:** whether generated claims are supported by retrieved contexts;
+- **Answer Relevance:** whether the answer addresses the question;
+- **Context Precision:** whether highly ranked contexts are useful;
+- **Context Recall:** whether the retrieved contexts contain the required evidence;
+- **Latency p50/p95:** typical and tail latency for embedding, retrieval, generation, and total execution.
 
-Run all tests:
+Run evaluation explicitly after configuring the provider and ingesting the target corpus:
 
 ```bash
-python -m pytest
-```
-
-Run a specific test file:
-
-```bash
-python -m pytest tests/test_ask_cli.py
-python -m pytest tests/test_api.py
-```
-
-The CLI and API tests use fake pipelines and do not call the real DeepSeek API or real Chroma vector database.
-
-## Git Ignore Policy
-
-The following files or directories should not be committed:
-
-```text
-.venv/
-.env
-__pycache__/
-.pytest_cache/
-data/chroma/
-data/raw/private/
-models/
-```
-
-Recommended `.gitignore` entries:
-
-```gitignore
-.venv/
-.env
-__pycache__/
-.pytest_cache/
-data/chroma/
-data/raw/private/
-models/
-```
-
-## Common Commands
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Build vector database:
-
-```bash
-python scripts/ingest.py
-```
-
-Ask one question:
-
-```bash
-python scripts/ask.py "你的问题"
-```
-
-Start interactive question answering:
-
-```bash
-python scripts/ask.py
-```
-
-Run real API smoke test:
-
-```bash
-python scripts/smoke_pipeline_api.py
-```
-
-Run tests:
-
-```bash
-python -m pytest
-```
-
-## Troubleshooting
-
-### Missing DeepSeek API key
-
-If you see an error about `DEEPSEEK_API_KEY`, check that your `.env` file exists in the project root:
-
-```text
-mini-rag/.env
-```
-
-and contains:
-
-```env
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-```
-
-### Vector database is missing or empty
-
-If the system says no context was found or asks you to run ingest, run:
-
-```bash
-python scripts/ingest.py
-```
-
-Then ask again:
-
-```bash
-python scripts/ask.py "你的问题"
-```
-
-### New documents are not reflected in answers
-
-After changing files in `data/raw/`, run:
-
-```bash
-python scripts/ingest.py
-```
-
-The query scripts do not update the vector database automatically.
-
-### Import error: No module named app
-
-Make sure you run commands from the project root:
-
-```bash
-cd mini-rag
-python scripts/ask.py "RAG是什么？"
-```
-
-## Current Status
-
-Implemented:
-
-- Document loading
-- Text chunking
-- Embedding generation
-- Chroma vector storage
-- Semantic retrieval
-- Prompt building
-- DeepSeek generation
-- RAG pipeline orchestration
-- Source citation fallback
-- Real API smoke test
-- Formal CLI question-answering entrypoint
-- FastAPI backend service
-- Unit tests
-
-Not implemented yet:
-
-- Web frontend
-- Evaluation dataset
-- Reranking
-- Hybrid retrieval
-- Docker deployment
-- CI pipeline
-
-## Roadmap
-
-Possible next steps:
-
-```text
-1. Add a Streamlit frontend
-2. Add evaluation questions and an eval script
-3. Add logging and debug mode
-4. Add Docker support
-5. Add GitHub Actions CI
-```
-
-## Purpose
-
-This project is designed as a learning-oriented mini RAG system.
-
-The goal is not to rely on a high-level RAG framework immediately, but to understand and implement the core components manually:
-
-```text
-loading → chunking → embedding → vector storage → retrieval → prompting → generation → sources → user entrypoint
-```
-
-
-## Request Logs
-
-`POST /ask` appends one JSON object per request to `logs/rag_requests.jsonl`.
-The file is ignored by Git because it may contain user questions and model answers.
-
-Each entry includes `chunk_mode`, whose value is `standard` or `parent-child`
-for the retrieval mode actually used by that request.
-
-A synthetic success and error example is available at
-`docs/example_rag_request_logs.jsonl`.
-
-View recent local logs in PowerShell:
-
-```powershell
-Get-Content logs/rag_requests.jsonl
-```
-
-## Badcase Feedback Loop
-
-A production RAG system improves through repeated observation and evaluation,
-not a single development pass. This repository provides a lightweight offline
-feedback loop:
-
-```text
-用户请求日志
-  -> 疑似失败案例自动发现
-  -> 人工填写 expected_answer、root_cause 和 solution
-  -> 已解决案例增量回流评测集
-  -> 持续评测和优化
-```
-
-Run the loop from the repository root:
-
-```bash
-python scripts/export_badcases.py
-python scripts/import_badcases_to_eval.py
 python eval/run_eval.py
 ```
 
-The exporter reads `logs/rag_requests.jsonl` and appends suspected failures to
-`eval/badcases.json`. It detects blank answers, explicit empty `contexts` lists,
-and answers containing `Not found in knowledge base.` or `未找到相关信息`. Current
-request logs do not contain `contexts`; a missing field is treated as unknown
-instead of an empty retrieval result.
+No production or portfolio benchmark is claimed until the enterprise demo corpus and evaluation protocol are finalized.
 
-Review `eval/badcases.json` manually and fill in `expected_answer`,
-`root_cause`, and `solution` as appropriate. This file may contain private
-questions and answers, so Git ignores it by default. Do not commit it without
-reviewing and sanitizing its contents.
+| Metric | Score |
+|---|---:|
+| Hit Rate | TBD |
+| Faithfulness | TBD |
+| Answer Relevance | TBD |
+| Context Precision | TBD |
+| Context Recall | TBD |
+| Latency p50/p95 | TBD |
 
-The importer incrementally updates
-`evaluation/dataset/eval_dataset.json`, the dataset used by
-`python eval/run_eval.py`. A nonblank `expected_answer` becomes `ground_truth`;
-when it is absent, a nonblank `solution` is used as the fallback. Unresolved
-cases are skipped so the evaluation dataset remains valid. Existing badcases
-are preserved by timestamp, and existing evaluation samples are preserved by
-normalized question; neither tool overwrites reviewed data.
+## Engineering Design
 
-## BM25 Retrieval
+### Why Hybrid Retrieval?
 
-BM25 is a sparse retrieval algorithm that ranks document chunks by keyword relevance. It runs independently from the existing embedding and Chroma-based dense retrieval pipeline.
+Dense retrieval captures semantic meaning and can match questions whose wording differs from the source material. BM25 captures exact enterprise terminology such as part numbers, policy names, procedure codes, defect categories, and engineering abbreviations. Normalizing and fusing both result sets improves coverage without confusing vector distance, lexical score, and fused relevance score semantics.
 
-The project currently supports:
+### Why Parent-Child Chunking?
 
-- Dense Retrieval (Embedding + Chroma)
-- Sparse Retrieval (BM25)
+Small child chunks improve retrieval precision because each embedding represents a focused passage. Larger parent chunks preserve the surrounding context needed for grounded generation. In parent-child mode, the system retrieves child embeddings, resolves the linked parent from SQLite, and sends the parent context to the prompt while retaining source provenance.
 
-Run the standalone BM25 smoke test from the project root:
+### Why an Evaluation Pipeline?
+
+Enterprise RAG requires measurable quality, not only functional demos. Separating retrieval metrics, generation metrics, abstention behavior, bad-case analysis, and stage latency makes failures diagnosable and allows changes to chunking, retrieval, prompts, or models to be compared against a baseline.
+
+## Roadmap
+
+### Completed
+
+- [x] Modular RAG pipeline
+- [x] FastAPI service
+- [x] Structured logging
+- [x] Hybrid retrieval
+- [x] Optional reranking
+- [x] Parent-child chunking
+- [x] Offline evaluation pipeline
+- [x] Query rewriting
+- [x] Conversation memory
+
+### Future
+
+- [ ] Online feedback loop
+- [ ] Production Docker deployment
+- [ ] Cloud deployment reference architecture
+
+Roadmap items will be introduced only when concrete quality, scale, security, or operational requirements justify them.
+
+## Testing
+
+Unit and integration tests use injected or mocked external dependencies and do not require live provider calls:
 
 ```bash
-python scripts/smoke_bm25.py
+pytest
 ```
 
-The smoke test uses local in-memory chunks and does not call the API, an LLM, or ChromaDB.
+Real-provider and full-chain smoke tests remain explicit and opt-in.
+
+## GitHub Repository Description
+
+> Enterprise RAG Engine - A production-oriented Retrieval-Augmented Generation system for enterprise knowledge management.
