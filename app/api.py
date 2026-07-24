@@ -7,7 +7,7 @@ from uuid import uuid4
 from collections.abc import Mapping
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 
 from app.config import DEFAULT_TOP_K
 from app.conversation.models import ConversationTurn
@@ -19,7 +19,7 @@ from app.pipeline_factory import (
     VectorStoreNotReadyError,
     get_default_dual_path_pipeline,
 )
-from app.schemas import AskRequest, AskResponse, HealthResponse, Source
+from app.schemas import AskRequest, AskResponse, Context, HealthResponse, Source
 
 
 API_VERSION = "0.1.0"
@@ -74,10 +74,11 @@ def health() -> HealthResponse:
 @app.post("/ask", response_model=AskResponse)
 def ask(
     payload: AskRequest,
+    trace_id: str | None = Header(default=None, alias="X-Trace-ID"),
     pipeline: Any = Depends(get_pipeline),
     store: ConversationStore = Depends(get_conversation_store),
 ) -> AskResponse:
-    resolved_top_k = DEFAULT_TOP_K if payload.top_k is None else payload.top_k
+    rag_trace_id = _resolve_trace_id(trace_id)
     original_question = payload.question
     rewritten_query = original_question
     query_was_rewritten = False
@@ -86,14 +87,14 @@ def ask(
     started_at = time.perf_counter()
     log_entry: RequestLog = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "request_id": str(uuid4()),
+        "request_id": rag_trace_id,
         "question": original_question[:500],
         "answer": "",
         "sources": [],
         "latency_ms": 0,
         "status": "error",
         "error_type": None,
-        "session_id": payload.session_id,
+        "session_id": rag_trace_id,
         "original_question": original_question[:500],
         "rewritten_query": rewritten_query[:500],
         "query_was_rewritten": query_was_rewritten,
@@ -110,8 +111,8 @@ def ask(
     try:
         result = pipeline.ask(
             original_question,
-            top_k=resolved_top_k,
-            session_id=payload.session_id,
+            top_k=DEFAULT_TOP_K,
+            session_id=rag_trace_id,
         )
         rewritten_query = (
             _display_value(_get_value(result, "rewritten_query"))
@@ -129,24 +130,19 @@ def ask(
             raw_history_count if isinstance(raw_history_count, int) else 0
         )
         response_sources = normalize_sources(result)
+        response_contexts = normalize_contexts(result)
         answer = _display_value(_get_value(result, "answer")) or ""
         latency_ms = int(round((time.perf_counter() - started_at) * 1000))
         response = AskResponse(
-            question=original_question,
-            rewritten_query=rewritten_query,
-            query_was_rewritten=query_was_rewritten,
             answer=answer,
             sources=response_sources,
+            contexts=response_contexts,
             latency_ms=latency_ms,
-            session_id=payload.session_id,
-            route=_get_value(result, "route") or "rag",
-            faq_id=_get_value(result, "faq_id"),
-            faq_score=_get_value(result, "faq_score"),
-            faq_match_type=_get_value(result, "faq_match_type"),
-            faq_cache_hit=bool(_get_value(result, "faq_cache_hit") or False),
+            route="rag",
+            rag_trace_id=rag_trace_id,
         )
         store.append_turn(
-            payload.session_id,
+            rag_trace_id,
             ConversationTurn(
                 user_message=original_question,
                 assistant_message=answer,
@@ -162,11 +158,13 @@ def ask(
         log_entry["query_was_rewritten"] = query_was_rewritten
         log_entry["rewrite_reason"] = rewrite_reason
         log_entry["history_turn_count"] = history_turn_count
-        log_entry["route"] = response.route
-        log_entry["faq_id"] = response.faq_id
-        log_entry["faq_score"] = response.faq_score
-        log_entry["faq_match_type"] = response.faq_match_type
-        log_entry["faq_cache_hit"] = response.faq_cache_hit
+        log_entry["route"] = _get_value(result, "route") or "rag"
+        log_entry["faq_id"] = _get_value(result, "faq_id")
+        log_entry["faq_score"] = _get_value(result, "faq_score")
+        log_entry["faq_match_type"] = _get_value(result, "faq_match_type")
+        log_entry["faq_cache_hit"] = bool(
+            _get_value(result, "faq_cache_hit") or False
+        )
         return response
     except ValueError as error:
         log_entry["error_type"] = type(error).__name__
@@ -217,6 +215,32 @@ def normalize_sources(result: Any) -> list[Source]:
     return sources
 
 
+def normalize_contexts(result: Any) -> list[Context]:
+    contexts = []
+    for item in _as_list(_get_value(result, "contexts")):
+        content = _text_from_item(item)
+        if content is None and isinstance(item, (str, bytes)):
+            content = _display_value(item)
+        if content is None:
+            continue
+
+        metadata = _metadata_from_item(item)
+        raw_chunk_id = _get_value(item, "chunk_id")
+        if raw_chunk_id is None and metadata:
+            raw_chunk_id = metadata.get("chunk_id")
+        raw_score = _get_value(item, "score")
+        contexts.append(
+            Context(
+                content=content,
+                source=_source_from_item(item),
+                chunk_id=_display_value(raw_chunk_id),
+                score=_numeric_value(raw_score),
+                metadata=metadata,
+            )
+        )
+    return contexts
+
+
 def _source_from_item(item: Any) -> str | None:
     if isinstance(item, (str, bytes)):
         return _display_value(item)
@@ -260,6 +284,20 @@ def _get_value(item: Any, field_name: str) -> Any:
     if isinstance(item, Mapping):
         return item.get(field_name)
     return getattr(item, field_name, None)
+
+
+def _resolve_trace_id(trace_id: str | None) -> str:
+    if trace_id is not None:
+        clean_trace_id = trace_id.strip()
+        if clean_trace_id:
+            return clean_trace_id
+    return str(uuid4())
+
+
+def _numeric_value(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def _pipeline_chunk_mode(pipeline: Any) -> str:

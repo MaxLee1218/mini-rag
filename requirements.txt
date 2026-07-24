@@ -1,4 +1,4 @@
-# Core RAG framework
+Core RAG framework
 langchain
 langchain-community
 langchain-openai
